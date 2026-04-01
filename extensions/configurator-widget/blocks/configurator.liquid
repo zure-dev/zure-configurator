@@ -1,0 +1,88 @@
+{% comment %}
+  Zure Configurator — Theme App Extension Block
+  Drop this into any product page template via the theme editor.
+  Works on Xtra, Enterprise, and all OS 2.0 themes.
+{% endcomment %}
+
+{% if product %}
+  <div
+    id="zure-configurator-root"
+    data-product-id="{{ product.id }}"
+    data-product-handle="{{ product.handle }}"
+    data-shop="{{ shop.permanent_domain }}"
+    data-app-url="{{ block.settings.app_url }}"
+    style="min-height: 200px;"
+  >
+    {%- comment -%} Widget loads here via JS {%- endcomment -%}
+    <noscript>
+      <p style="padding: 20px; text-align: center; color: #6f6f6f;">
+        JavaScript is required to use the product configurator.
+        Please enable JavaScript in your browser settings.
+      </p>
+    </noscript>
+  </div>
+
+  {{ 'configurator.css' | asset_url | stylesheet_tag }}
+  <script src="{{ 'configurator.js' | asset_url }}" defer></script>
+
+  {% comment %}
+    Optional: lightweight theme bridge script.
+    Listens for configurator events and updates native theme elements.
+    This is the ONLY theme integration point. Remove if not needed.
+  {% endcomment %}
+  <script>
+    (function() {
+      document.addEventListener('zure:price-update', function(e) {
+        var priceEl = document.querySelector('[data-product-price], .product__price .price-item--regular');
+        if (priceEl && e.detail && e.detail.price != null) {
+          priceEl.textContent = '$' + Number(e.detail.price).toFixed(2);
+        }
+
+        var compareEl = document.querySelector('[data-compare-price], .product__price .price-item--sale');
+        if (compareEl && e.detail && e.detail.compareAt != null) {
+          compareEl.textContent = '$' + Number(e.detail.compareAt).toFixed(2);
+          compareEl.style.display = '';
+        } else if (compareEl) {
+          compareEl.style.display = 'none';
+        }
+      });
+
+      document.addEventListener('zure:cart-add', function() {
+        if (typeof window.Shopify !== 'undefined' && window.Shopify.theme) {
+          fetch('/cart.js')
+            .then(function(r) { return r.json(); })
+            .then(function(cart) {
+              var countEl = document.querySelector('[data-cart-count], .cart-count');
+              if (countEl) countEl.textContent = cart.item_count;
+            });
+        }
+      });
+    })();
+  </script>
+{% endif %}
+
+{% schema %}
+{
+  "name": "Zure Configurator",
+  "target": "section",
+  "enabled_on": {
+    "templates": ["product"]
+  },
+  "settings": [
+    {
+      "type": "text",
+      "id": "app_url",
+      "label": "Configurator App URL",
+      "info": "The URL of your Zure Configurator app instance",
+      "default": "https://zure-configurator.vercel.app"
+    },
+    {
+      "type": "checkbox",
+      "id": "hide_native_options",
+      "label": "Hide native variant selectors",
+      "default": true,
+      "info": "When enabled, hides Shopify's native variant selectors on this product page"
+    }
+  ]
+}
+{% endschema %}

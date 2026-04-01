@@ -1,0 +1,11 @@
+#zure-configurator-root {
+  padding: 16px;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+  margin-top: 16px;
+  background: #fafafa;
+}
+
+#zure-configurator-root h3 {
+  margin: 0 0 8px;
+}

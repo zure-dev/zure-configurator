@@ -1,0 +1,26 @@
+name = "Variant King"
+client_id = ""
+application_url = "https://example.com"
+embedded = true
+handle = "variant-king"
+
+[build]
+automatically_update_urls_on_dev = true
+
+[access_scopes]
+scopes = "read_products,write_products,read_orders,read_customers"
+
+[auth]
+redirect_urls = [
+  "https://example.com/api/auth/callback"
+]
+
+[webhooks]
+api_version = "2024-10"
+
+[[webhooks.subscriptions]]
+topics = ["products/update", "products/delete", "orders/create", "app/uninstalled"]
+uri = "/api/webhooks"
+
+[pos]
+embedded = false

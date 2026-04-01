@@ -1,0 +1,554 @@
+// Zure Configurator — Database Schema
+// Multi-tenant SaaS-ready from day one
+// All entities are scoped to Store (tenant)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ──────────────────────────────────────────────
+// TENANT LAYER
+// ──────────────────────────────────────────────
+
+model Merchant {
+  id        String   @id @default(cuid())
+  name      String
+  email     String?
+  stores    Store[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("merchants")
+}
+
+model Store {
+  id                 String   @id @default(cuid())
+  merchantId         String
+  merchant           Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  shopifyDomain      String   @unique
+  shopifyAccessToken String   // encrypted at rest via application layer
+  shopifyPlan        String?
+  currency           String   @default("AUD")
+  timezone           String   @default("Australia/Sydney")
+  settings           Json?    // store-level config: theme prefs, trade tag name, etc.
+  installedAt        DateTime @default(now())
+  uninstalledAt      DateTime?
+
+  productFamilies ProductFamily[]
+  sessions        ConfigurationSession[]
+  auditLogs       AuditLog[]
+
+  @@map("stores")
+}
+
+// ──────────────────────────────────────────────
+// PRODUCT FAMILY LAYER
+// ──────────────────────────────────────────────
+
+model ProductFamily {
+  id          String @id @default(cuid())
+  storeId     String
+  store       Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  name        String // "Zure Vanity 600-1500mm"
+  handle      String // URL-friendly identifier, e.g. "zure-vanity-600-1500"
+  slug        String // Legacy alias — kept for backward compat, mirrors handle
+  category    String?  // e.g. "vanities", "cabinetry", "benchtops"
+  description String?
+  status      ProductFamilyStatus @default(DRAFT)
+  basePrice   Decimal             @default(0) @db.Decimal(10, 2)
+
+  // Direct Shopify product link (denormalized for fast lookup)
+  shopifyProductId String?  // e.g. "gid://shopify/Product/123456" or numeric
+
+  // Default media set (lowest priority in cascade)
+  defaultMediaSet Json? // [{ url, alt, sortOrder, type }]
+
+  shopifyLink    ProductFamilyShopifyLink?
+  optionGroups   OptionGroup[]
+  dependencyRules  OptionDependencyRule[]
+  exclusionRules   OptionExclusionRule[]
+  priceRules       PriceRule[]
+  tradePriceRules  TradePriceRule[]
+  mediaRules       MediaRule[]
+  summaryRules     SummaryRule[]
+  components       Component[]
+  componentMaps    ConfigurationToComponentMap[]
+  ruleVersions     RuleVersion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([storeId, handle])
+  @@unique([storeId, slug])
+  @@index([storeId, status])
+  @@index([storeId, category])
+  @@map("product_families")
+}
+
+enum ProductFamilyStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+model ProductFamilyShopifyLink {
+  id                   String        @id @default(cuid())
+  productFamilyId      String        @unique
+  productFamily        ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
+  shopifyProductId     String        // e.g. "gid://shopify/Product/123456"
+  shopifyProductNumericId String?    // numeric for Cart API
+  shopifyVariantId     String?       // default variant used for cart line
+  shopifyVariantNumericId String?
+  shopifyProductHandle String?
+  syncedAt             DateTime?
+
+  @@index([shopifyProductId])
+  @@map("product_family_shopify_links")
+}
+
+// ──────────────────────────────────────────────
+// OPTION LAYER
+// ──────────────────────────────────────────────
+
+model OptionGroup {
+  id              String        @id @default(cuid())
+  productFamilyId String
+  productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
+  name            String        // "Vanity Size"
+  slug            String        // "vanity-size"
+  displayType     OptionDisplayType @default(TILE)
+  sortOrder       Int           @default(0)
+  isRequired      Boolean       @default(true)
+  helperText      String?
+  stepNumber      Int?          // which step in the configurator UX
+
+  values OptionValue[]
+
+  @@unique([productFamilyId, slug])
+  @@index([productFamilyId, sortOrder])
+  @@map("option_groups")
+}
+
+enum OptionDisplayType {
+  SWATCH
+  TILE
+  THUMBNAIL
+  DROPDOWN
+  RADIO
+  TOGGLE
+}
+
+model OptionValue {
+  id            String      @id @default(cuid())
+  optionGroupId String
+  optionGroup   OptionGroup @relation(fields: [optionGroupId], references: [id], onDelete: Cascade)
+  name          String      // "600mm", "Woodland Oak"
+  slug          String      // "600mm", "woodland-oak"
+  sortOrder     Int         @default(0)
+  isDefault     Boolean     @default(false)
+  swatchColor   String?     // hex color e.g. "#8B6914"
+  swatchImage   String?     // URL to swatch image
+  thumbnailUrl  String?     // URL to thumbnail image
+  description   String?     // Short description for tooltip
+  metadata      Json?       // arbitrary KV for future use
+
+  @@unique([optionGroupId, slug])
+  @@index([optionGroupId, sortOrder])
+  @@map("option_values")
+}
+
+// ──────────────────────────────────────────────
+// RULE LAYER
+// ──────────────────────────────────────────────
+
+model OptionDependencyRule {
+  id              String        @id @default(cuid())
+  productFamilyId String
+  productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
+  name            String?       // human-readable name for admin
+  description     String?
+
+  // "When option group X has value Y selected..."
+  whenOptionGroupSlug  String
+  whenOptionValueSlug  String
+
+  // "...then option group Z should only allow these values"
+  thenOptionGroupSlug  String
+  thenOptionValueSlugs String[]  // array of value slugs that become available
+
+  isActive      Boolean  @default(true)
+  ruleVersionId String?
+  sortOrder     Int      @default(0)
+
+  @@index([productFamilyId, isActive])
+  @@map("option_dependency_rules")
+}
+
+model OptionExclusionRule {
+  id              String        @id @default(cuid())
+  productFamilyId String
+  productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
+  name            String?
+  description     String?
+
+  // "When option group X has value Y selected..."
+  whenOptionGroupSlug  String
+  whenOptionValueSlug  String
+
+  // "...then option group Z should NOT allow these values"
+  excludeOptionGroupSlug  String
+  excludeOptionValueSlugs String[]
+
+  isActive      Boolean  @default(true)
+  ruleVersionId String?
+  sortOrder     Int      @default(0)
+
+  @@index([productFamilyId, isActive])
+  @@map("option_exclusion_rules")
+}
+
+model PriceRule {
+  id              String        @id @default(cuid())
+  productFamilyId String
+  productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
+  name            String?
+
+  optionGroupSlug String
+  optionValueSlug String
+  priceModifier   Decimal @db.Decimal(10, 2) // e.g. +269.00 or -50.00
+  modifierType    PriceModifierType @default(ADDITIVE)
+
+  // Optional: only apply when other selections match
+  // e.g. [{ "optionGroupSlug": "vanity-size", "optionValueSlug": "1500mm" }]
+  conditions Json?
+
+  isActive      Boolean  @default(true)
+  ruleVersionId String?
+  sortOrder     Int      @default(0)
+
+  @@index([productFamilyId, optionGroupSlug, optionValueSlug])
+  @@map("price_rules")
+}
+
+model TradePriceRule {
+  id              String        @id @default(cuid())
+  productFamilyId String
+  productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
+  name            String?
+
+  optionGroupSlug String
+  optionValueSlug String
+  priceModifier   Decimal @db.Decimal(10, 2)
+  modifierType    PriceModifierType @default(ADDITIVE)
+
+  // How to identify trade customers
+  // e.g. { "type": "customer_tag", "value": "trade" }
+  tradeCondition Json
+
+  // Optional: additional conditions
+  conditions Json?
+
+  isActive      Boolean  @default(true)
+  ruleVersionId String?
+  sortOrder     Int      @default(0)
+
+  @@index([productFamilyId, optionGroupSlug, optionValueSlug])
+  @@map("trade_price_rules")
+}
+
+enum PriceModifierType {
+  ADDITIVE     // +$269
+  PERCENTAGE   // +10%
+  ABSOLUTE     // set to $X (replaces base)
+  OVERRIDE     // replace base price entirely
+}
+
+model MediaRule {
+  id              String        @id @default(cuid())
+  productFamilyId String
+  productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
+  name            String?
+
+  // Higher priority overrides lower priority
+  // 0 = family default, 10 = finish override, 20 = basin/top override, 30 = exact match
+  priority Int @default(0)
+
+  // Conditions that must all match for this rule to fire
+  // [{ "optionGroupSlug": "cabinet-finish", "optionValueSlug": "woodland-oak" }]
+  conditions Json
+
+  // Media set to apply when conditions match
+  // [{ "url": "https://...", "alt": "...", "sortOrder": 0, "type": "hero" | "gallery" }]
+  mediaSet Json
+
+  isActive      Boolean  @default(true)
+  ruleVersionId String?
+
+  @@index([productFamilyId, priority])
+  @@map("media_rules")
+}
+
+model SummaryRule {
+  id              String        @id @default(cuid())
+  productFamilyId String
+  productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
+
+  optionGroupSlug String
+  // Template with Mustache-style placeholders
+  // e.g. "Size: {{value}}", "Top: {{value}} (+{{priceDelta}})"
+  template  String
+  sortOrder Int @default(0)
+
+  // Whether to include this in the line item summary
+  includeInLineItem Boolean @default(true)
+
+  @@index([productFamilyId, sortOrder])
+  @@map("summary_rules")
+}
+
+// ──────────────────────────────────────────────
+// COMPONENT LAYER
+// ──────────────────────────────────────────────
+
+model Component {
+  id              String        @id @default(cuid())
+  productFamilyId String
+  productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
+  name            String        // "Woodland Oak Cabinet 900mm"
+  sku             String        // Internal SKU
+  type            ComponentType
+  shopifyProductId  String?     // Shopify internal product (may not be customer-facing)
+  shopifyVariantId  String?
+  metadata        Json?
+
+  inventoryPolicy InventoryPolicy?
+
+  @@index([productFamilyId, type])
+  @@index([sku])
+  @@map("components")
+}
+
+enum ComponentType {
+  CABINET
+  STONE_TOP
+  BASIN
+  HANDLE
+  ACCESSORY
+  TAP
+  PLUG_WASTE
+  OTHER
+}
+
+model ConfigurationToComponentMap {
+  id              String        @id @default(cuid())
+  productFamilyId String
+  productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
+
+  // Conditions (all must match) to map to this component
+  // [{ "optionGroupSlug": "vanity-size", "optionValueSlug": "900mm" },
+  //  { "optionGroupSlug": "cabinet-finish", "optionValueSlug": "woodland-oak" }]
+  conditions Json
+
+  componentId String
+  quantity    Int @default(1)
+
+  @@index([productFamilyId])
+  @@map("configuration_to_component_maps")
+}
+
+// ──────────────────────────────────────────────
+// INVENTORY (Phase 2 activation, schema-ready now)
+// ──────────────────────────────────────────────
+
+model InventoryPolicy {
+  id            String @id @default(cuid())
+  componentId   String @unique
+  component     Component @relation(fields: [componentId], references: [id], onDelete: Cascade)
+
+  trackingMode      InventoryTrackingMode @default(NONE)
+  currentStock      Int?
+  lowStockThreshold Int?
+  leadTimeDays      Int?
+  metadata          Json?
+
+  updatedAt DateTime @updatedAt
+
+  @@map("inventory_policies")
+}
+
+enum InventoryTrackingMode {
+  NONE   // Phase 1: no tracking
+  SOFT   // Phase 2: display-only availability
+  HARD   // Phase 3: deduct at checkout
+}
+
+// ──────────────────────────────────────────────
+// SESSION & SNAPSHOT LAYER
+// ──────────────────────────────────────────────
+
+model ConfigurationSession {
+  id              String @id @default(cuid())
+  storeId         String
+  store           Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  productFamilyId String
+  shopifyProductId String?
+  customerIdent   String? // anonymous session ID or Shopify customer ID
+  isTradeCustomer Boolean @default(false)
+
+  // Current live selections { "vanity-size": "900mm", "cabinet-finish": "woodland-oak" }
+  selections    Json
+  resolvedPrice Decimal? @db.Decimal(10, 2)
+
+  status    SessionStatus @default(ACTIVE)
+  expiresAt DateTime
+
+  snapshot ConfigurationSnapshot?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([storeId, status])
+  @@index([customerIdent])
+  @@index([expiresAt])
+  @@map("configuration_sessions")
+}
+
+enum SessionStatus {
+  ACTIVE
+  RESOLVED
+  EXPIRED
+  ABANDONED
+}
+
+model ConfigurationSnapshot {
+  id        String               @id @default(cuid())
+  sessionId String               @unique
+  session   ConfigurationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  productFamilyId String
+  ruleVersionId   String
+
+  // Full frozen state at time of Add to Cart
+  selections        Json  // { "vanity-size": { "slug": "900mm", "name": "900mm" }, ... }
+  pricingBreakdown  Json  // { basePrice, modifiers[], totalPrice, isTradePrice, ... }
+  mediaState        Json  // { heroImage, gallery[], appliedRules[] }
+  componentMappings Json  // [{ componentId, sku, name, quantity }]
+  tradeState        Json? // trade-specific pricing if applicable
+
+  // Human-readable summary
+  summaryText       String // "900mm | Woodland Oak | Calacatta Quartz (+$269) | ..."
+  summaryStructured Json   // [{ label, value, priceDelta }]
+
+  // Integrity
+  validationSignature String // SHA-256 hash of inputs + outputs
+
+  cartResolution CartResolutionRecord?
+
+  createdAt DateTime @default(now())
+
+  @@index([productFamilyId])
+  @@map("configuration_snapshots")
+}
+
+model CartResolutionRecord {
+  id         String                @id @default(cuid())
+  snapshotId String                @unique
+  snapshot   ConfigurationSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  shopifyCartToken    String?
+  shopifyVariantId    String // variant ID added to cart
+  lineItemProperties  Json   // what was sent to Shopify Cart API
+  resolvedPrice       Decimal @db.Decimal(10, 2)
+
+  orderResolution OrderResolutionRecord?
+
+  createdAt DateTime @default(now())
+
+  @@index([shopifyCartToken])
+  @@map("cart_resolution_records")
+}
+
+model OrderResolutionRecord {
+  id               String               @id @default(cuid())
+  cartResolutionId String               @unique
+  cartResolution   CartResolutionRecord @relation(fields: [cartResolutionId], references: [id], onDelete: Cascade)
+
+  shopifyOrderId    String?
+  shopifyOrderName  String?  // e.g. "#1042"
+  shopifyLineItemId String?
+
+  componentSkus    Json  // resolved component SKUs + quantities at order time
+  stockLogicState  Json? // inventory state snapshot
+  leadTimeState    Json? // lead time info at order time
+
+  fulfilmentStatus String?
+  notes            String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shopifyOrderId])
+  @@map("order_resolution_records")
+}
+
+// ──────────────────────────────────────────────
+// VERSIONING & AUDIT
+// ──────────────────────────────────────────────
+
+model RuleVersion {
+  id              String        @id @default(cuid())
+  productFamilyId String
+  productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
+  version         Int
+  description     String?
+
+  // Full snapshot of all rules at this version
+  snapshotData Json
+
+  publishedAt DateTime?
+  createdBy   String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([productFamilyId, version])
+  @@map("rule_versions")
+}
+
+model AuditLog {
+  id       String @id @default(cuid())
+  storeId  String
+  store    Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  userId   String?
+  userName String?
+
+  action     AuditAction
+  entityType String // "ProductFamily", "OptionGroup", "PriceRule", etc.
+  entityId   String
+
+  before   Json?  // state before change
+  after    Json?  // state after change
+  metadata Json?  // additional context
+
+  createdAt DateTime @default(now())
+
+  @@index([storeId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  PUBLISH
+  IMPORT
+  EXPORT
+  ACTIVATE
+  DEACTIVATE
+  ARCHIVE
+}
