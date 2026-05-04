@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -30,6 +30,7 @@ async function main() {
       description: 'Waverton vanity',
       status: 'DRAFT',
       basePrice: '0',
+      defaultMediaSet: [],
     },
     create: {
       storeId: store.id,
@@ -175,6 +176,9 @@ async function main() {
     console.log(`Option group ready: ${group.name} (${group.id})`);
 
     for (const valueInput of groupInput.values) {
+      const swatchColor =
+        'swatchColor' in valueInput ? valueInput.swatchColor ?? null : null;
+
       const value = await prisma.optionValue.upsert({
         where: {
           optionGroupId_slug: {
@@ -186,11 +190,11 @@ async function main() {
           name: valueInput.name,
           sortOrder: valueInput.sortOrder,
           isDefault: valueInput.isDefault,
-          swatchColor: 'swatchColor' in valueInput ? valueInput.swatchColor ?? null : null,
+          swatchColor,
           swatchImage: null,
           thumbnailUrl: null,
           description: null,
-          metadata: null,
+          metadata: Prisma.JsonNull,
         },
         create: {
           optionGroupId: group.id,
@@ -198,11 +202,11 @@ async function main() {
           slug: valueInput.slug,
           sortOrder: valueInput.sortOrder,
           isDefault: valueInput.isDefault,
-          swatchColor: 'swatchColor' in valueInput ? valueInput.swatchColor ?? null : null,
+          swatchColor,
           swatchImage: null,
           thumbnailUrl: null,
           description: null,
-          metadata: null,
+          metadata: Prisma.JsonNull,
         },
       });
 

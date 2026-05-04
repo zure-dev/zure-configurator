@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Page, Layout, Card, FormLayout, Select, Button, Banner,
+  Page, Layout, Card, FormLayout, TextField, Select, Button, Banner,
   InlineStack, BlockStack, Text, Badge, Spinner, Modal, Divider,
 } from '@shopify/polaris';
 import { useParams } from 'next/navigation';

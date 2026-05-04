@@ -1,13 +1,13 @@
 /**
  * Migration Script: VO Variant Options → Zure Configurator
  *
- * This script reads a VO export file (JSON) and creates the corresponding
+ * Reads a VO export file (JSON) and creates the corresponding
  * product family, option groups, values, and rules in the Zure Configurator database.
  *
  * Usage:
  *   npx tsx scripts/migrate-vo.ts --input ./vo-export.json --store store_zure --family "Zure Vanity"
  *
- * The VO export format is expected to be:
+ * Expected VO export format:
  * {
  *   "product": { "title": "...", "handle": "...", "id": "..." },
  *   "options": [
@@ -24,7 +24,13 @@
  * }
  */
 
-import { PrismaClient } from '@prisma/client';
+import {
+  OptionDisplayType,
+  PriceModifierType,
+  ProductFamilyStatus,
+  Prisma,
+  PrismaClient,
+} from '@prisma/client';
 import { readFileSync } from 'fs';
 
 const prisma = new PrismaClient();
@@ -64,15 +70,16 @@ function slugify(text: string): string {
     .replace(/^-|-$/g, '');
 }
 
-function mapDisplayType(voType: string): string {
-  const map: Record<string, string> = {
-    buttons: 'TILE',
-    swatches: 'SWATCH',
-    dropdown: 'DROPDOWN',
-    images: 'THUMBNAIL',
-    radio: 'RADIO',
+function mapDisplayType(voType: string): OptionDisplayType {
+  const map: Record<string, OptionDisplayType> = {
+    buttons: OptionDisplayType.TILE,
+    swatches: OptionDisplayType.SWATCH,
+    dropdown: OptionDisplayType.DROPDOWN,
+    images: OptionDisplayType.THUMBNAIL,
+    radio: OptionDisplayType.RADIO,
   };
-  return map[voType] ?? 'TILE';
+
+  return map[voType] ?? OptionDisplayType.TILE;
 }
 
 async function migrate() {
@@ -82,7 +89,9 @@ async function migrate() {
   const familyIndex = args.indexOf('--family');
 
   if (inputIndex === -1 || storeIndex === -1) {
-    console.error('Usage: npx tsx scripts/migrate-vo.ts --input <file> --store <store_id> [--family "Name"]');
+    console.error(
+      'Usage: npx tsx scripts/migrate-vo.ts --input <file> --store <store_id> [--family "Name"]'
+    );
     process.exit(1);
   }
 
@@ -97,30 +106,33 @@ async function migrate() {
   console.log(`📋 Product: ${voData.product.title}`);
   console.log(`🔧 Options: ${voData.options.length}`);
 
-  // Verify store exists
   const store = await prisma.store.findUniqueOrThrow({ where: { id: storeId } });
   console.log(`✓ Store verified: ${store.shopifyDomain}`);
 
   const name = familyName ?? voData.product.title;
-  const slug = slugify(name);
+  const baseSlug = slugify(name);
+  const migratedSlug = `${baseSlug}-migrated`;
+  const handle = voData.product.handle
+    ? `${slugify(voData.product.handle)}-migrated`
+    : migratedSlug;
 
-  // Create product family
   const family = await prisma.productFamily.create({
     data: {
       storeId,
       name,
-      slug: `${slug}-migrated`,
+      handle,
+      slug: migratedSlug,
       description: `Migrated from VO Variant Options on ${new Date().toISOString()}`,
-      status: 'DRAFT',
-      basePrice: 0, // Will need manual adjustment
+      status: ProductFamilyStatus.DRAFT,
+      basePrice: 0,
+      defaultMediaSet: Prisma.JsonNull,
     },
   });
+
   console.log(`✓ Product family created: ${family.name} (${family.id})`);
 
-  // Track option group slugs for condition mapping
-  const groupSlugMap = new Map<string, string>(); // VO name → slug
+  const groupSlugMap = new Map<string, string>();
 
-  // Create option groups + values
   for (let i = 0; i < voData.options.length; i++) {
     const voOption = voData.options[i]!;
     const groupSlug = slugify(voOption.name);
@@ -131,7 +143,7 @@ async function migrate() {
         productFamilyId: family.id,
         name: voOption.name,
         slug: groupSlug,
-        displayType: mapDisplayType(voOption.type) as any,
+        displayType: mapDisplayType(voOption.type),
         sortOrder: i,
         stepNumber: i + 1,
         isRequired: voOption.required ?? true,
@@ -148,30 +160,33 @@ async function migrate() {
           name: voValue.label,
           slug: valueSlug,
           sortOrder: j,
-          isDefault: voValue.default ?? (j === 0),
-          swatchColor: voValue.swatch_color,
-          thumbnailUrl: voValue.image_url,
+          isDefault: voValue.default ?? j === 0,
+          swatchColor: voValue.swatch_color ?? null,
+          swatchImage: null,
+          thumbnailUrl: voValue.image_url ?? null,
+          description: null,
+          metadata: Prisma.JsonNull,
         },
       });
 
-      // Create price rule if modifier exists
-      if (voValue.price_modifier && voValue.price_modifier !== 0) {
+      if (typeof voValue.price_modifier === 'number' && voValue.price_modifier !== 0) {
         await prisma.priceRule.create({
           data: {
             productFamilyId: family.id,
             optionGroupSlug: groupSlug,
             optionValueSlug: valueSlug,
             priceModifier: voValue.price_modifier,
-            modifierType: 'ADDITIVE',
+            modifierType: PriceModifierType.ADDITIVE,
           },
         });
       }
     }
 
-    console.log(`  ✓ Option: ${voOption.name} (${voOption.values.length} values, ${mapDisplayType(voOption.type)})`);
+    console.log(
+      `  ✓ Option: ${voOption.name} (${voOption.values.length} values, ${mapDisplayType(voOption.type)})`
+    );
   }
 
-  // Convert VO conditions to dependency/exclusion rules
   let depCount = 0;
   let excCount = 0;
 
@@ -183,7 +198,9 @@ async function migrate() {
       const targetGroupSlug = groupSlugMap.get(voOption.name);
 
       if (!whenGroupSlug || !targetGroupSlug) {
-        console.warn(`  ⚠ Skipping condition: cannot resolve "${condition.when_option}" → "${voOption.name}"`);
+        console.warn(
+          `  ⚠ Skipping condition: cannot resolve "${condition.when_option}" → "${voOption.name}"`
+        );
         continue;
       }
 
@@ -221,7 +238,6 @@ async function migrate() {
   console.log(`  ✓ Dependency rules: ${depCount}`);
   console.log(`  ✓ Exclusion rules: ${excCount}`);
 
-  // Summary
   console.log('\n✅ Migration complete!');
   console.log(`   Family ID: ${family.id}`);
   console.log(`   Status: DRAFT (review before activating)`);

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Page,
   Layout,
@@ -9,8 +9,8 @@ import {
   Text,
   Badge,
   Button,
-  InlineStack,
   BlockStack,
+  InlineStack,
   EmptyState,
   Spinner,
   Banner,
@@ -49,7 +49,7 @@ interface ProductFamily {
   updatedAt: string;
 }
 
-interface CreateFormState {
+interface FormState {
   name: string;
   handle: string;
   category: string;
@@ -58,7 +58,12 @@ interface CreateFormState {
   description: string;
 }
 
-const EMPTY_FORM: CreateFormState = {
+interface FormErrors {
+  name?: string;
+  handle?: string;
+}
+
+const BLANK_FORM: FormState = {
   name: '',
   handle: '',
   category: '',
@@ -74,7 +79,7 @@ const STATUS_OPTIONS = [
 ];
 
 const CATEGORY_OPTIONS = [
-  { label: 'None', value: '' },
+  { label: '— None —', value: '' },
   { label: 'Vanities', value: 'vanities' },
   { label: 'Cabinetry', value: 'cabinetry' },
   { label: 'Benchtops', value: 'benchtops' },
@@ -87,7 +92,7 @@ const CATEGORY_OPTIONS = [
 // Helpers
 // ──────────────────────────────────────────────
 
-function generateHandle(name: string): string {
+function toHandle(name: string): string {
   return name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -107,7 +112,7 @@ function statusBadge(status: string) {
   }
 }
 
-function formatDate(iso: string): string {
+function shortDate(iso: string): string {
   try {
     return new Date(iso).toLocaleDateString('en-AU', {
       day: 'numeric',
@@ -119,115 +124,156 @@ function formatDate(iso: string): string {
   }
 }
 
+function apiFetch(path: string, options?: RequestInit): Promise<Response> {
+  let shopDomain = '';
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search);
+    shopDomain = params.get('shop') ?? '';
+  }
+  const separator = path.includes('?') ? '&' : '?';
+  const url = shopDomain ? `${path}${separator}shop=${shopDomain}` : path;
+  return fetch(url, options);
+}
+
+function validateForm(
+  form: FormState,
+  families: ProductFamily[],
+  editingId: string | null
+): FormErrors {
+  const errors: FormErrors = {};
+
+  if (!form.name.trim()) {
+    errors.name = 'Name is required';
+  }
+
+  const handle = (form.handle || toHandle(form.name)).trim();
+  if (!handle) {
+    errors.handle = 'Handle is required';
+  } else {
+    const conflict = families.find(
+      (f) => (f.handle === handle || f.slug === handle) && f.id !== editingId
+    );
+    if (conflict) {
+      errors.handle = `Handle "${handle}" is already used by "${conflict.name}"`;
+    }
+  }
+
+  return errors;
+}
+
 // ──────────────────────────────────────────────
-// Component
+// Page Component
 // ──────────────────────────────────────────────
 
 export default function ProductFamiliesPage() {
   const router = useRouter();
 
-  // ── List state ──
+  // ── List ──
   const [families, setFamilies] = useState<ProductFamily[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState('');
 
-  // ── Create modal state ──
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [form, setForm] = useState<CreateFormState>(EMPTY_FORM);
+  // ── Form modal (shared for create + edit) ──
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingFamily, setEditingFamily] = useState<ProductFamily | null>(null);
+  const [form, setForm] = useState<FormState>(BLANK_FORM);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-
-  // ── Track whether handle was manually edited ──
   const [handleTouched, setHandleTouched] = useState(false);
+  const [touched, setTouched] = useState<Set<string>>(new Set());
 
-  // ── Fetch families ──
-  const fetchFamilies = useCallback(async () => {
+  // ── Delete ──
+  const [deleteTarget, setDeleteTarget] = useState<ProductFamily | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  // ── Feedback ──
+  const [successMsg, setSuccessMsg] = useState('');
+
+  // ── Derived ──
+  const isEditMode = editingFamily !== null;
+  const formErrors = useMemo(
+    () => validateForm(form, families, editingFamily?.id ?? null),
+    [form, families, editingFamily]
+  );
+  const isFormValid = Object.keys(formErrors).length === 0;
+
+  // ────────────────────────────────────────────
+  // FETCH
+  // ────────────────────────────────────────────
+
+  const loadFamilies = useCallback(async () => {
     setLoading(true);
     setFetchError('');
     try {
-      const res = await fetch('/api/product-families');
+      const res = await apiFetch('/api/product-families');
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error ?? `HTTP ${res.status}`);
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `Server returned ${res.status}`);
       }
       const data = await res.json();
       setFamilies(data.families ?? []);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to load product families';
-      setFetchError(msg);
-      console.error('[ProductFamilies] fetch error:', e);
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : 'Could not load product families');
     } finally {
       setLoading(false);
     }
   }, []);
 
+  useEffect(() => { loadFamilies(); }, [loadFamilies]);
+
   useEffect(() => {
-    fetchFamilies();
-  }, [fetchFamilies]);
+    if (!successMsg) return;
+    const t = setTimeout(() => setSuccessMsg(''), 4000);
+    return () => clearTimeout(t);
+  }, [successMsg]);
 
-  // ── Create handler ──
-  const handleCreate = useCallback(async () => {
-    setSaving(true);
-    setSaveError('');
+  // ────────────────────────────────────────────
+  // MODAL open / close
+  // ────────────────────────────────────────────
 
-    try {
-      const payload: Record<string, unknown> = {
-        name: form.name.trim(),
-        handle: (form.handle || generateHandle(form.name)).trim(),
-        status: form.status,
-      };
-
-      // Only include optional fields if they have values
-      if (form.category) payload.category = form.category;
-      if (form.description.trim()) payload.description = form.description.trim();
-      if (form.shopifyProductId.trim()) payload.shopifyProductId = form.shopifyProductId.trim();
-
-      const res = await fetch('/api/product-families', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setSaveError(data.error ?? 'Failed to create product family');
-        return;
-      }
-
-      // Success — close modal, reset form, refresh list
-      setCreateModalOpen(false);
-      setForm(EMPTY_FORM);
-      setHandleTouched(false);
-      await fetchFamilies();
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : 'Network error');
-    } finally {
-      setSaving(false);
-    }
-  }, [form, fetchFamilies]);
-
-  // ── Open/close modal ──
   const openCreateModal = useCallback(() => {
-    setForm(EMPTY_FORM);
+    setEditingFamily(null);
+    setForm(BLANK_FORM);
     setHandleTouched(false);
+    setTouched(new Set());
     setSaveError('');
-    setCreateModalOpen(true);
+    setModalOpen(true);
   }, []);
 
-  const closeCreateModal = useCallback(() => {
-    setCreateModalOpen(false);
+  const openEditModal = useCallback((family: ProductFamily) => {
+    setEditingFamily(family);
+    setForm({
+      name: family.name,
+      handle: family.handle || family.slug,
+      category: family.category ?? '',
+      status: family.status,
+      shopifyProductId: family.shopifyProductId ?? '',
+      description: family.description ?? '',
+    });
+    setHandleTouched(true);
+    setTouched(new Set());
+    setSaveError('');
+    setModalOpen(true);
+  }, []);
+
+  const closeModal = useCallback(() => {
+    setModalOpen(false);
+    setEditingFamily(null);
     setSaveError('');
   }, []);
 
-  // ── Form field handlers ──
-  const updateField = useCallback(
-    (field: keyof CreateFormState) => (value: string) => {
+  // ────────────────────────────────────────────
+  // FORM field handlers
+  // ────────────────────────────────────────────
+
+  const setField = useCallback(
+    (field: keyof FormState) => (value: string) => {
+      setTouched((prev) => new Set(prev).add(field));
       setForm((prev) => {
         const next = { ...prev, [field]: value };
-        // Auto-generate handle from name unless user manually edited it
         if (field === 'name' && !handleTouched) {
-          next.handle = generateHandle(value);
+          next.handle = toHandle(value);
         }
         return next;
       });
@@ -235,19 +281,121 @@ export default function ProductFamiliesPage() {
     [handleTouched]
   );
 
-  const updateHandle = useCallback((value: string) => {
+  const setHandleField = useCallback((value: string) => {
     setHandleTouched(true);
+    setTouched((prev) => new Set(prev).add('handle'));
     setForm((prev) => ({ ...prev, handle: value }));
   }, []);
 
-  // ── Index table selection (for future bulk actions) ──
+  const fieldError = useCallback(
+    (field: keyof FormErrors): string | undefined => {
+      return touched.has(field) ? formErrors[field] : undefined;
+    },
+    [formErrors, touched]
+  );
+
+  // ────────────────────────────────────────────
+  // SAVE (create or update)
+  // ────────────────────────────────────────────
+
+  const handleSave = useCallback(async () => {
+    setTouched(new Set(['name', 'handle']));
+    if (!isFormValid) return;
+
+    setSaving(true);
+    setSaveError('');
+
+    const payload: Record<string, unknown> = {
+      name: form.name.trim(),
+      handle: (form.handle || toHandle(form.name)).trim(),
+      status: form.status || 'DRAFT',
+      category: form.category || null,
+      description: form.description.trim() || null,
+      shopifyProductId: form.shopifyProductId.trim() || null,
+    };
+
+    try {
+      const url = isEditMode
+        ? `/api/product-families/${editingFamily!.id}`
+        : '/api/product-families';
+
+      const res = await apiFetch(url, {
+        method: isEditMode ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setSaveError(data.error ?? `Failed to ${isEditMode ? 'update' : 'create'}`);
+        return;
+      }
+
+      const name = data.family?.name ?? form.name;
+      setModalOpen(false);
+      setEditingFamily(null);
+      setForm(BLANK_FORM);
+      setHandleTouched(false);
+      setTouched(new Set());
+      setSuccessMsg(isEditMode ? `"${name}" updated` : `"${name}" created`);
+      await loadFamilies();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setSaving(false);
+    }
+  }, [form, isFormValid, isEditMode, editingFamily, loadFamilies]);
+
+  // ────────────────────────────────────────────
+  // DELETE
+  // ────────────────────────────────────────────
+
+  const openDeleteConfirm = useCallback((family: ProductFamily) => {
+    setDeleteTarget(family);
+    setDeleteError('');
+  }, []);
+
+  const closeDeleteConfirm = useCallback(() => {
+    setDeleteTarget(null);
+    setDeleteError('');
+  }, []);
+
+  const handleDelete = useCallback(async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError('');
+
+    try {
+      const res = await apiFetch(`/api/product-families/${deleteTarget.id}`, {
+        method: 'DELETE',
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setDeleteError(body.error ?? 'Failed to delete');
+        return;
+      }
+
+      const name = deleteTarget.name;
+      setDeleteTarget(null);
+      setSuccessMsg(`"${name}" deleted`);
+      await loadFamilies();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setDeleting(false);
+    }
+  }, [deleteTarget, loadFamilies]);
+
+  // ── IndexTable ──
   const resourceName = { singular: 'product family', plural: 'product families' };
   const { selectedResources, allResourcesSelected, handleSelectionChange } =
-    useIndexResourceState(families);
+    useIndexResourceState(families.map((f) => ({ id: f.id })));
 
-  // ──────────────────────────────────────────
-  // Render: Loading
-  // ──────────────────────────────────────────
+  // ────────────────────────────────────────────
+  // RENDER: Loading
+  // ────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -265,9 +413,9 @@ export default function ProductFamiliesPage() {
     );
   }
 
-  // ──────────────────────────────────────────
-  // Render: Error
-  // ──────────────────────────────────────────
+  // ────────────────────────────────────────────
+  // RENDER: Fetch error
+  // ────────────────────────────────────────────
 
   if (fetchError) {
     return (
@@ -276,8 +424,8 @@ export default function ProductFamiliesPage() {
           <Layout.Section>
             <Banner
               tone="critical"
-              title="Failed to load product families"
-              action={{ content: 'Retry', onAction: fetchFamilies }}
+              title="Could not load product families"
+              action={{ content: 'Try again', onAction: loadFamilies }}
             >
               <p>{fetchError}</p>
             </Banner>
@@ -287,44 +435,42 @@ export default function ProductFamiliesPage() {
     );
   }
 
-  // ──────────────────────────────────────────
-  // Render: Empty state
-  // ──────────────────────────────────────────
+  // ────────────────────────────────────────────
+  // RENDER: Empty
+  // ────────────────────────────────────────────
 
-  if (families.length === 0) {
+  if (families.length === 0 && !successMsg) {
     return (
       <Page title="Product Families">
         <Layout>
           <Layout.Section>
             <Card>
               <EmptyState
-                heading="Create your first configurable product"
+                heading="No product families yet"
                 action={{ content: 'Create product family', onAction: openCreateModal }}
                 image=""
               >
                 <p>
-                  Product families define the option groups, rules, pricing, and media
-                  for your configurable products. Start by creating one.
+                  Product families define the configurable products in your store.
+                  Create your first one to get started.
                 </p>
               </EmptyState>
             </Card>
           </Layout.Section>
         </Layout>
-        {renderCreateModal()}
+        {renderFormModal()}
       </Page>
     );
   }
 
-  // ──────────────────────────────────────────
-  // Render: Table rows
-  // ──────────────────────────────────────────
+  // ────────────────────────────────────────────
+  // RENDER: Table rows
+  // ────────────────────────────────────────────
 
-  const rowMarkup = families.map((family, index) => {
-    const ruleCount =
-      (family._count?.dependencyRules ?? 0) +
-      (family._count?.exclusionRules ?? 0);
-    const optionCount = family._count?.optionGroups ?? 0;
-    const componentCount = family._count?.components ?? 0;
+  const rows = families.map((family, index) => {
+    const rules = (family._count?.dependencyRules ?? 0) + (family._count?.exclusionRules ?? 0);
+    const options = family._count?.optionGroups ?? 0;
+    const components = family._count?.components ?? 0;
 
     return (
       <IndexTable.Row
@@ -332,7 +478,6 @@ export default function ProductFamiliesPage() {
         key={family.id}
         position={index}
         selected={selectedResources.includes(family.id)}
-        onClick={() => router.push(`/admin/product-families/${family.id}`)}
       >
         <IndexTable.Cell>
           <BlockStack gap="050">
@@ -340,22 +485,18 @@ export default function ProductFamiliesPage() {
               {family.name}
             </Text>
             <Text as="span" variant="bodySm" tone="subdued">
-              {family.handle}
+              {family.handle || family.slug}
             </Text>
           </BlockStack>
         </IndexTable.Cell>
 
         <IndexTable.Cell>
-          {family.category ? (
-            <Badge>{family.category}</Badge>
-          ) : (
-            <Text as="span" variant="bodySm" tone="subdued">—</Text>
-          )}
+          {family.category
+            ? <Badge>{family.category}</Badge>
+            : <Text as="span" variant="bodySm" tone="subdued">—</Text>}
         </IndexTable.Cell>
 
-        <IndexTable.Cell>
-          {statusBadge(family.status)}
-        </IndexTable.Cell>
+        <IndexTable.Cell>{statusBadge(family.status)}</IndexTable.Cell>
 
         <IndexTable.Cell>
           <Text as="span" variant="bodySm" tone="subdued">
@@ -367,38 +508,50 @@ export default function ProductFamiliesPage() {
 
         <IndexTable.Cell>
           <Text as="span" variant="bodySm" tone="subdued">
-            {optionCount} options · {ruleCount} rules · {componentCount} components
+            {`${options} options · ${rules} rules · ${components} components`}
           </Text>
         </IndexTable.Cell>
 
         <IndexTable.Cell>
           <Text as="span" variant="bodySm" tone="subdued">
-            {formatDate(family.updatedAt)}
+            {shortDate(family.updatedAt)}
           </Text>
+        </IndexTable.Cell>
+
+        <IndexTable.Cell>
+          <InlineStack gap="200" blockAlign="center">
+            <Button size="slim" variant="plain" onClick={() => openEditModal(family)}>
+              Edit
+            </Button>
+            <Button size="slim" variant="plain" tone="critical" onClick={() => openDeleteConfirm(family)}>
+              Delete
+            </Button>
+          </InlineStack>
         </IndexTable.Cell>
       </IndexTable.Row>
     );
   });
 
-  // ──────────────────────────────────────────
-  // Render: Create modal
-  // ──────────────────────────────────────────
+  // ────────────────────────────────────────────
+  // RENDER: Create / Edit modal
+  // ────────────────────────────────────────────
 
-  function renderCreateModal() {
+  function renderFormModal() {
+    const title = isEditMode ? `Edit: ${editingFamily!.name}` : 'Create Product Family';
+    const submitLabel = isEditMode ? 'Save changes' : 'Create';
+
     return (
       <Modal
-        open={createModalOpen}
-        onClose={closeCreateModal}
-        title="Create Product Family"
+        open={modalOpen}
+        onClose={closeModal}
+        title={title}
         primaryAction={{
-          content: 'Create',
-          onAction: handleCreate,
+          content: submitLabel,
+          onAction: handleSave,
           loading: saving,
-          disabled: !form.name.trim(),
+          disabled: saving || (touched.size > 0 && !isFormValid),
         }}
-        secondaryActions={[
-          { content: 'Cancel', onAction: closeCreateModal },
-        ]}
+        secondaryActions={[{ content: 'Cancel', onAction: closeModal }]}
       >
         <Modal.Section>
           {saveError && (
@@ -413,54 +566,58 @@ export default function ProductFamiliesPage() {
             <TextField
               label="Name"
               value={form.name}
-              onChange={updateField('name')}
+              onChange={setField('name')}
               placeholder="e.g. Zure Vanity 600-1500mm"
-              helpText="The display name for this product family"
+              helpText="Display name for this product family"
               autoComplete="off"
               requiredIndicator
+              error={fieldError('name')}
             />
 
             <TextField
               label="Handle"
               value={form.handle}
-              onChange={updateHandle}
+              onChange={setHandleField}
               placeholder="e.g. zure-vanity-600-1500mm"
-              helpText="URL-friendly identifier. Auto-generated from name if left empty."
-              autoComplete="off"
-              connectedLeft={
-                <Text as="span" variant="bodySm" tone="subdued">/</Text>
+              helpText={
+                handleTouched
+                  ? 'URL-friendly identifier. Must be unique per store.'
+                  : 'Auto-generated from name. Edit to override.'
               }
+              autoComplete="off"
+              requiredIndicator
+              error={fieldError('handle')}
             />
 
             <Select
               label="Category"
               options={CATEGORY_OPTIONS}
               value={form.category}
-              onChange={updateField('category')}
-              helpText="Group product families by type"
+              onChange={setField('category')}
+              helpText="Used to group and filter product families"
             />
 
             <Select
               label="Status"
               options={STATUS_OPTIONS}
               value={form.status}
-              onChange={updateField('status')}
+              onChange={setField('status')}
             />
 
             <TextField
               label="Shopify Product ID"
               value={form.shopifyProductId}
-              onChange={updateField('shopifyProductId')}
+              onChange={setField('shopifyProductId')}
               placeholder="e.g. gid://shopify/Product/123456789"
-              helpText="Link to the parent Shopify product. Can be set later."
+              helpText="Optional. Link to the parent Shopify product."
               autoComplete="off"
             />
 
             <TextField
               label="Description"
               value={form.description}
-              onChange={updateField('description')}
-              placeholder="Describe this configurable product..."
+              onChange={setField('description')}
+              placeholder="Brief description of this configurable product..."
               multiline={3}
               autoComplete="off"
             />
@@ -470,9 +627,52 @@ export default function ProductFamiliesPage() {
     );
   }
 
-  // ──────────────────────────────────────────
-  // Render: Main page
-  // ──────────────────────────────────────────
+  // ────────────────────────────────────────────
+  // RENDER: Delete confirmation modal
+  // ────────────────────────────────────────────
+
+  function renderDeleteModal() {
+    if (!deleteTarget) return null;
+
+    return (
+      <Modal
+        open={true}
+        onClose={closeDeleteConfirm}
+        title="Delete product family"
+        primaryAction={{
+          content: 'Delete',
+          onAction: handleDelete,
+          loading: deleting,
+          destructive: true,
+        }}
+        secondaryActions={[{ content: 'Cancel', onAction: closeDeleteConfirm }]}
+      >
+        <Modal.Section>
+          {deleteError && (
+            <div style={{ marginBottom: 16 }}>
+              <Banner tone="critical" onDismiss={() => setDeleteError('')}>
+                {deleteError}
+              </Banner>
+            </div>
+          )}
+
+          <BlockStack gap="200">
+            <Text as="p" variant="bodyMd">
+              Are you sure you want to delete <strong>{deleteTarget.name}</strong>?
+            </Text>
+            <Text as="p" variant="bodySm" tone="subdued">
+              This will permanently remove this product family and all its option groups,
+              rules, pricing, media mappings, and component mappings. This cannot be undone.
+            </Text>
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+    );
+  }
+
+  // ────────────────────────────────────────────
+  // RENDER: Main page
+  // ────────────────────────────────────────────
 
   return (
     <Page
@@ -483,6 +683,14 @@ export default function ProductFamiliesPage() {
       }}
     >
       <Layout>
+        {successMsg && (
+          <Layout.Section>
+            <Banner tone="success" onDismiss={() => setSuccessMsg('')}>
+              {successMsg}
+            </Banner>
+          </Layout.Section>
+        )}
+
         <Layout.Section>
           <Card padding="0">
             <IndexTable
@@ -499,16 +707,18 @@ export default function ProductFamiliesPage() {
                 { title: 'Shopify Product' },
                 { title: 'Configuration' },
                 { title: 'Updated' },
+                { title: 'Actions' },
               ]}
               selectable={false}
             >
-              {rowMarkup}
+              {rows}
             </IndexTable>
           </Card>
         </Layout.Section>
       </Layout>
 
-      {renderCreateModal()}
+      {renderFormModal()}
+      {renderDeleteModal()}
     </Page>
   );
 }

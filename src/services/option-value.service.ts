@@ -1,4 +1,5 @@
 import { db } from '@/lib/db';
+import { Prisma } from '@prisma/client';
 import { createAuditLog } from '@/lib/audit';
 
 // ──────────────────────────────────────────────
@@ -271,7 +272,9 @@ export async function createOptionValue(
         swatchImage: input.swatchImage ?? null,
         thumbnailUrl: input.thumbnailUrl ?? null,
         description: input.description ?? null,
-        metadata: input.metadata ?? null,
+        metadata: input.metadata != null
+          ? (input.metadata as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
       },
       include: {
         optionGroup: {
@@ -352,7 +355,11 @@ export async function updateOptionValue(
     if (input.swatchImage !== undefined) updateData.swatchImage = input.swatchImage;
     if (input.thumbnailUrl !== undefined) updateData.thumbnailUrl = input.thumbnailUrl;
     if (input.description !== undefined) updateData.description = input.description;
-    if (input.metadata !== undefined) updateData.metadata = input.metadata;
+    if (input.metadata !== undefined) {
+      updateData.metadata = input.metadata != null
+        ? (input.metadata as Prisma.InputJsonValue)
+        : Prisma.JsonNull;
+    }
 
     return tx.optionValue.update({
       where: { id: valueId },
@@ -471,7 +478,9 @@ export async function createOptionValueByGroupSlug(
         swatchImage: input.swatchImage ?? null,
         thumbnailUrl: input.thumbnailUrl ?? null,
         description: input.description ?? null,
-        metadata: input.metadata ?? null,
+        metadata: input.metadata != null
+          ? (input.metadata as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
       },
       include: {
         optionGroup: {

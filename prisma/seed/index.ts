@@ -1,14 +1,83 @@
-import { PrismaClient } from '@prisma/client';
+import {
+  ComponentType,
+  OptionDisplayType,
+  Prisma,
+  PrismaClient,
+  PriceModifierType,
+} from '@prisma/client';
 
 const prisma = new PrismaClient();
+
+type SeedOptionValue = {
+  slug: string;
+  name: string;
+  sortOrder: number;
+  isDefault?: boolean;
+  swatchColor?: string | null;
+};
+
+type SeedOptionGroup = {
+  slug: string;
+  name: string;
+  displayType: OptionDisplayType;
+  sortOrder: number;
+  stepNumber: number;
+  isRequired?: boolean;
+  values: SeedOptionValue[];
+};
+
+type SeedDependency = {
+  name: string;
+  whenGroup: string;
+  whenValue: string;
+  thenGroup: string;
+  thenValues: string[];
+};
+
+type SeedExclusion = {
+  name: string;
+  whenGroup: string;
+  whenValue: string;
+  excludeGroup: string;
+  excludeValues: string[];
+};
+
+type SeedPriceRule = {
+  optionGroupSlug: string;
+  optionValueSlug: string;
+  priceModifier: number;
+};
+
+type SeedSummaryRule = {
+  optionGroupSlug: string;
+  template: string;
+  sortOrder: number;
+};
+
+type SeedComponent = {
+  sku: string;
+  name: string;
+  type: ComponentType;
+};
+
+type SeedComponentMap = {
+  conditions: Array<{
+    optionGroupSlug: string;
+    optionValueSlug: string;
+  }>;
+  sku: string;
+  qty: number;
+};
 
 async function main() {
   console.log('🌱 Seeding Zure Configurator database...');
 
-  // ──── Merchant & Store ────
   const merchant = await prisma.merchant.upsert({
     where: { id: 'merchant_zure' },
-    update: {},
+    update: {
+      name: 'Zure',
+      email: 'admin@zure.com.au',
+    },
     create: {
       id: 'merchant_zure',
       name: 'Zure',
@@ -16,13 +85,22 @@ async function main() {
     },
   });
 
-  const storeDomain = process.env.DEV_STORE_DOMAIN ?? 'zure-store.myshopify.com';
+  const storeDomain = process.env.DEV_STORE_DOMAIN ?? 'zure-dev-2.myshopify.com';
 
   const store = await prisma.store.upsert({
     where: { shopifyDomain: storeDomain },
-    update: {},
+    update: {
+      merchantId: merchant.id,
+      shopifyPlan: 'shopify_plus',
+      currency: 'AUD',
+      timezone: 'Australia/Sydney',
+      settings: {
+        tradeTagName: 'trade',
+        themeName: 'Xtra',
+      },
+    },
     create: {
-      id: 'store_zure',
+      id: 'store_zure_dev_2',
       merchantId: merchant.id,
       shopifyDomain: storeDomain,
       shopifyAccessToken: 'dev-token-replace-in-production',
@@ -39,10 +117,21 @@ async function main() {
   console.log(`  ✓ Merchant: ${merchant.name}`);
   console.log(`  ✓ Store: ${store.shopifyDomain}`);
 
-  // ──── Product Family ────
   const family = await prisma.productFamily.upsert({
     where: { storeId_slug: { storeId: store.id, slug: 'zure-vanity' } },
-    update: {},
+    update: {
+      name: 'Zure Vanity',
+      handle: 'zure-vanity',
+      slug: 'zure-vanity',
+      category: 'vanities',
+      description: 'Configurable bathroom vanity — 600mm to 1500mm',
+      status: 'ACTIVE',
+      basePrice: 1299,
+      defaultMediaSet: [
+        { url: '/images/vanity-default-hero.jpg', alt: 'Zure Vanity', sortOrder: 0, type: 'hero' },
+        { url: '/images/vanity-default-angle.jpg', alt: 'Zure Vanity Angle', sortOrder: 1, type: 'gallery' },
+      ],
+    },
     create: {
       id: 'pf_zure_vanity',
       storeId: store.id,
@@ -62,10 +151,13 @@ async function main() {
 
   console.log(`  ✓ Product Family: ${family.name}`);
 
-  // ──── Option Groups & Values ────
-  const optionGroupsData = [
+  const optionGroupsData: SeedOptionGroup[] = [
     {
-      slug: 'vanity-size', name: 'Vanity Size', displayType: 'TILE', sortOrder: 1, stepNumber: 1,
+      slug: 'vanity-size',
+      name: 'Vanity Size',
+      displayType: OptionDisplayType.TILE,
+      sortOrder: 1,
+      stepNumber: 1,
       values: [
         { slug: '600mm', name: '600mm', sortOrder: 0, isDefault: true },
         { slug: '750mm', name: '750mm', sortOrder: 1 },
@@ -75,7 +167,11 @@ async function main() {
       ],
     },
     {
-      slug: 'cabinet-finish', name: 'Cabinet Finish', displayType: 'SWATCH', sortOrder: 2, stepNumber: 1,
+      slug: 'cabinet-finish',
+      name: 'Cabinet Finish',
+      displayType: OptionDisplayType.SWATCH,
+      sortOrder: 2,
+      stepNumber: 1,
       values: [
         { slug: 'matte-white', name: 'Matte White', sortOrder: 0, isDefault: true, swatchColor: '#FFFFFF' },
         { slug: 'matte-black', name: 'Matte Black', sortOrder: 1, swatchColor: '#1A1A1A' },
@@ -84,7 +180,11 @@ async function main() {
       ],
     },
     {
-      slug: 'stone-top', name: 'Stone Top', displayType: 'TILE', sortOrder: 3, stepNumber: 2,
+      slug: 'stone-top',
+      name: 'Stone Top',
+      displayType: OptionDisplayType.TILE,
+      sortOrder: 3,
+      stepNumber: 2,
       values: [
         { slug: 'no-top', name: 'No Top (Cabinet Only)', sortOrder: 0 },
         { slug: 'stone-white', name: 'Stone White', sortOrder: 1, isDefault: true },
@@ -93,7 +193,12 @@ async function main() {
       ],
     },
     {
-      slug: 'basin-type', name: 'Basin Type', displayType: 'THUMBNAIL', sortOrder: 4, stepNumber: 3, isRequired: false,
+      slug: 'basin-type',
+      name: 'Basin Type',
+      displayType: OptionDisplayType.THUMBNAIL,
+      sortOrder: 4,
+      stepNumber: 3,
+      isRequired: false,
       values: [
         { slug: 'no-basin', name: 'No Basin', sortOrder: 0 },
         { slug: 'undermount', name: 'Undermount', sortOrder: 1, isDefault: true },
@@ -102,7 +207,12 @@ async function main() {
       ],
     },
     {
-      slug: 'basin-position', name: 'Basin Position', displayType: 'TILE', sortOrder: 5, stepNumber: 4, isRequired: false,
+      slug: 'basin-position',
+      name: 'Basin Position',
+      displayType: OptionDisplayType.TILE,
+      sortOrder: 5,
+      stepNumber: 4,
+      isRequired: false,
       values: [
         { slug: 'centre', name: 'Centre', sortOrder: 0, isDefault: true },
         { slug: 'left', name: 'Left', sortOrder: 1 },
@@ -111,7 +221,11 @@ async function main() {
       ],
     },
     {
-      slug: 'tap-holes', name: 'Tap Holes', displayType: 'RADIO', sortOrder: 6, stepNumber: 4,
+      slug: 'tap-holes',
+      name: 'Tap Holes',
+      displayType: OptionDisplayType.RADIO,
+      sortOrder: 6,
+      stepNumber: 4,
       values: [
         { slug: 'no-hole', name: 'No Tap Hole', sortOrder: 0 },
         { slug: '1-hole', name: '1 Tap Hole', sortOrder: 1, isDefault: true },
@@ -119,7 +233,11 @@ async function main() {
       ],
     },
     {
-      slug: 'handle-colour', name: 'Handle Colour', displayType: 'SWATCH', sortOrder: 7, stepNumber: 5,
+      slug: 'handle-colour',
+      name: 'Handle Colour',
+      displayType: OptionDisplayType.SWATCH,
+      sortOrder: 7,
+      stepNumber: 5,
       values: [
         { slug: 'chrome', name: 'Chrome', sortOrder: 0, isDefault: true, swatchColor: '#C0C0C0' },
         { slug: 'matte-black', name: 'Matte Black', sortOrder: 1, swatchColor: '#1A1A1A' },
@@ -128,7 +246,12 @@ async function main() {
       ],
     },
     {
-      slug: 'plug-waste', name: 'Plug & Waste', displayType: 'DROPDOWN', sortOrder: 8, stepNumber: 6, isRequired: false,
+      slug: 'plug-waste',
+      name: 'Plug & Waste',
+      displayType: OptionDisplayType.DROPDOWN,
+      sortOrder: 8,
+      stepNumber: 6,
+      isRequired: false,
       values: [
         { slug: 'none', name: 'None', sortOrder: 0, isDefault: true },
         { slug: 'chrome-popup', name: 'Chrome Pop-Up', sortOrder: 1 },
@@ -140,24 +263,61 @@ async function main() {
 
   for (const groupData of optionGroupsData) {
     const { values, ...groupFields } = groupData;
+
     const group = await prisma.optionGroup.upsert({
-      where: { productFamilyId_slug: { productFamilyId: family.id, slug: groupFields.slug } },
-      update: {},
+      where: {
+        productFamilyId_slug: {
+          productFamilyId: family.id,
+          slug: groupFields.slug,
+        },
+      },
+      update: {
+        name: groupFields.name,
+        displayType: groupFields.displayType,
+        sortOrder: groupFields.sortOrder,
+        stepNumber: groupFields.stepNumber,
+        isRequired: groupFields.isRequired ?? true,
+      },
       create: {
         productFamilyId: family.id,
+        slug: groupFields.slug,
+        name: groupFields.name,
+        displayType: groupFields.displayType,
+        sortOrder: groupFields.sortOrder,
+        stepNumber: groupFields.stepNumber,
         isRequired: groupFields.isRequired ?? true,
-        ...groupFields,
       },
     });
 
     for (const valueData of values) {
       await prisma.optionValue.upsert({
-        where: { optionGroupId_slug: { optionGroupId: group.id, slug: valueData.slug } },
-        update: {},
+        where: {
+          optionGroupId_slug: {
+            optionGroupId: group.id,
+            slug: valueData.slug,
+          },
+        },
+        update: {
+          name: valueData.name,
+          sortOrder: valueData.sortOrder,
+          isDefault: valueData.isDefault ?? false,
+          swatchColor: valueData.swatchColor ?? null,
+          swatchImage: null,
+          thumbnailUrl: null,
+          description: null,
+          metadata: Prisma.JsonNull,
+        },
         create: {
           optionGroupId: group.id,
+          slug: valueData.slug,
+          name: valueData.name,
+          sortOrder: valueData.sortOrder,
           isDefault: valueData.isDefault ?? false,
-          ...valueData,
+          swatchColor: valueData.swatchColor ?? null,
+          swatchImage: null,
+          thumbnailUrl: null,
+          description: null,
+          metadata: Prisma.JsonNull,
         },
       });
     }
@@ -165,13 +325,51 @@ async function main() {
     console.log(`  ✓ Option Group: ${group.name} (${values.length} values)`);
   }
 
-  // ──── Dependency Rules ────
-  const dependencies = [
-    { name: '600mm → centre basin only', when: ['vanity-size', '600mm'], then: ['basin-position', ['centre']] },
-    { name: '1200mm → all positions', when: ['vanity-size', '1200mm'], then: ['basin-position', ['centre', 'left', 'right', 'double']] },
-    { name: '1500mm → all positions', when: ['vanity-size', '1500mm'], then: ['basin-position', ['centre', 'left', 'right', 'double']] },
-    { name: 'No top → no basin', when: ['stone-top', 'no-top'], then: ['basin-type', ['no-basin']] },
-    { name: 'No top → no tap holes', when: ['stone-top', 'no-top'], then: ['tap-holes', ['no-hole']] },
+  await prisma.optionDependencyRule.deleteMany({ where: { productFamilyId: family.id } });
+  await prisma.optionExclusionRule.deleteMany({ where: { productFamilyId: family.id } });
+  await prisma.priceRule.deleteMany({ where: { productFamilyId: family.id } });
+  await prisma.tradePriceRule.deleteMany({ where: { productFamilyId: family.id } });
+  await prisma.summaryRule.deleteMany({ where: { productFamilyId: family.id } });
+  await prisma.configurationToComponentMap.deleteMany({ where: { productFamilyId: family.id } });
+  await prisma.component.deleteMany({ where: { productFamilyId: family.id } });
+  await prisma.ruleVersion.deleteMany({ where: { productFamilyId: family.id } });
+
+  const dependencies: SeedDependency[] = [
+    {
+      name: '600mm → centre basin only',
+      whenGroup: 'vanity-size',
+      whenValue: '600mm',
+      thenGroup: 'basin-position',
+      thenValues: ['centre'],
+    },
+    {
+      name: '1200mm → all positions',
+      whenGroup: 'vanity-size',
+      whenValue: '1200mm',
+      thenGroup: 'basin-position',
+      thenValues: ['centre', 'left', 'right', 'double'],
+    },
+    {
+      name: '1500mm → all positions',
+      whenGroup: 'vanity-size',
+      whenValue: '1500mm',
+      thenGroup: 'basin-position',
+      thenValues: ['centre', 'left', 'right', 'double'],
+    },
+    {
+      name: 'No top → no basin',
+      whenGroup: 'stone-top',
+      whenValue: 'no-top',
+      thenGroup: 'basin-type',
+      thenValues: ['no-basin'],
+    },
+    {
+      name: 'No top → no tap holes',
+      whenGroup: 'stone-top',
+      whenValue: 'no-top',
+      thenGroup: 'tap-holes',
+      thenValues: ['no-hole'],
+    },
   ];
 
   for (const dep of dependencies) {
@@ -179,19 +377,30 @@ async function main() {
       data: {
         productFamilyId: family.id,
         name: dep.name,
-        whenOptionGroupSlug: dep.when[0]!,
-        whenOptionValueSlug: dep.when[1]!,
-        thenOptionGroupSlug: dep.then[0] as string,
-        thenOptionValueSlugs: dep.then[1] as string[],
+        whenOptionGroupSlug: dep.whenGroup,
+        whenOptionValueSlug: dep.whenValue,
+        thenOptionGroupSlug: dep.thenGroup,
+        thenOptionValueSlugs: dep.thenValues,
       },
     });
   }
   console.log(`  ✓ Dependency rules: ${dependencies.length}`);
 
-  // ──── Exclusion Rules ────
-  const exclusions = [
-    { name: 'Above counter oval → no 3 tap holes', when: ['basin-type', 'above-counter-oval'], exclude: ['tap-holes', ['3-holes']] },
-    { name: 'Above counter rect → no 3 tap holes', when: ['basin-type', 'above-counter-rect'], exclude: ['tap-holes', ['3-holes']] },
+  const exclusions: SeedExclusion[] = [
+    {
+      name: 'Above counter oval → no 3 tap holes',
+      whenGroup: 'basin-type',
+      whenValue: 'above-counter-oval',
+      excludeGroup: 'tap-holes',
+      excludeValues: ['3-holes'],
+    },
+    {
+      name: 'Above counter rect → no 3 tap holes',
+      whenGroup: 'basin-type',
+      whenValue: 'above-counter-rect',
+      excludeGroup: 'tap-holes',
+      excludeValues: ['3-holes'],
+    },
   ];
 
   for (const exc of exclusions) {
@@ -199,138 +408,199 @@ async function main() {
       data: {
         productFamilyId: family.id,
         name: exc.name,
-        whenOptionGroupSlug: exc.when[0]!,
-        whenOptionValueSlug: exc.when[1]!,
-        excludeOptionGroupSlug: exc.exclude[0] as string,
-        excludeOptionValueSlugs: exc.exclude[1] as string[],
+        whenOptionGroupSlug: exc.whenGroup,
+        whenOptionValueSlug: exc.whenValue,
+        excludeOptionGroupSlug: exc.excludeGroup,
+        excludeOptionValueSlugs: exc.excludeValues,
       },
     });
   }
   console.log(`  ✓ Exclusion rules: ${exclusions.length}`);
 
-  // ──── Retail Price Rules ────
-  const priceRules = [
-    ['vanity-size', '750mm', 200], ['vanity-size', '900mm', 400],
-    ['vanity-size', '1200mm', 700], ['vanity-size', '1500mm', 1000],
-    ['stone-top', 'calacatta-quartz', 269], ['stone-top', 'engineered-stone', 349],
-    ['stone-top', 'no-top', -200],
-    ['basin-type', 'above-counter-oval', 199], ['basin-type', 'above-counter-rect', 229],
-    ['handle-colour', 'brushed-gold', 49],
-    ['plug-waste', 'chrome-popup', 59], ['plug-waste', 'matte-black-popup', 89],
-    ['plug-waste', 'brushed-nickel-popup', 79],
+  const priceRules: SeedPriceRule[] = [
+    { optionGroupSlug: 'vanity-size', optionValueSlug: '750mm', priceModifier: 200 },
+    { optionGroupSlug: 'vanity-size', optionValueSlug: '900mm', priceModifier: 400 },
+    { optionGroupSlug: 'vanity-size', optionValueSlug: '1200mm', priceModifier: 700 },
+    { optionGroupSlug: 'vanity-size', optionValueSlug: '1500mm', priceModifier: 1000 },
+    { optionGroupSlug: 'stone-top', optionValueSlug: 'calacatta-quartz', priceModifier: 269 },
+    { optionGroupSlug: 'stone-top', optionValueSlug: 'engineered-stone', priceModifier: 349 },
+    { optionGroupSlug: 'stone-top', optionValueSlug: 'no-top', priceModifier: -200 },
+    { optionGroupSlug: 'basin-type', optionValueSlug: 'above-counter-oval', priceModifier: 199 },
+    { optionGroupSlug: 'basin-type', optionValueSlug: 'above-counter-rect', priceModifier: 229 },
+    { optionGroupSlug: 'handle-colour', optionValueSlug: 'brushed-gold', priceModifier: 49 },
+    { optionGroupSlug: 'plug-waste', optionValueSlug: 'chrome-popup', priceModifier: 59 },
+    { optionGroupSlug: 'plug-waste', optionValueSlug: 'matte-black-popup', priceModifier: 89 },
+    { optionGroupSlug: 'plug-waste', optionValueSlug: 'brushed-nickel-popup', priceModifier: 79 },
   ];
 
-  for (const [group, value, mod] of priceRules) {
+  for (const rule of priceRules) {
     await prisma.priceRule.create({
       data: {
         productFamilyId: family.id,
-        optionGroupSlug: group as string,
-        optionValueSlug: value as string,
-        priceModifier: mod as number,
-        modifierType: 'ADDITIVE',
+        optionGroupSlug: rule.optionGroupSlug,
+        optionValueSlug: rule.optionValueSlug,
+        priceModifier: rule.priceModifier,
+        modifierType: PriceModifierType.ADDITIVE,
       },
     });
   }
   console.log(`  ✓ Retail price rules: ${priceRules.length}`);
 
-  // ──── Trade Price Rules ────
-  const tradePriceRules = [
-    ['vanity-size', '750mm', 150], ['vanity-size', '900mm', 300],
-    ['vanity-size', '1200mm', 525], ['vanity-size', '1500mm', 750],
-    ['stone-top', 'calacatta-quartz', 200], ['stone-top', 'engineered-stone', 260],
-    ['basin-type', 'above-counter-oval', 149],
+  const tradePriceRules: SeedPriceRule[] = [
+    { optionGroupSlug: 'vanity-size', optionValueSlug: '750mm', priceModifier: 150 },
+    { optionGroupSlug: 'vanity-size', optionValueSlug: '900mm', priceModifier: 300 },
+    { optionGroupSlug: 'vanity-size', optionValueSlug: '1200mm', priceModifier: 525 },
+    { optionGroupSlug: 'vanity-size', optionValueSlug: '1500mm', priceModifier: 750 },
+    { optionGroupSlug: 'stone-top', optionValueSlug: 'calacatta-quartz', priceModifier: 200 },
+    { optionGroupSlug: 'stone-top', optionValueSlug: 'engineered-stone', priceModifier: 260 },
+    { optionGroupSlug: 'basin-type', optionValueSlug: 'above-counter-oval', priceModifier: 149 },
   ];
 
-  for (const [group, value, mod] of tradePriceRules) {
+  for (const rule of tradePriceRules) {
     await prisma.tradePriceRule.create({
       data: {
         productFamilyId: family.id,
-        optionGroupSlug: group as string,
-        optionValueSlug: value as string,
-        priceModifier: mod as number,
-        modifierType: 'ADDITIVE',
-        tradeCondition: { type: 'customer_tag', value: 'trade' },
+        optionGroupSlug: rule.optionGroupSlug,
+        optionValueSlug: rule.optionValueSlug,
+        priceModifier: rule.priceModifier,
+        modifierType: PriceModifierType.ADDITIVE,
+        tradeCondition: {
+          type: 'customer_tag',
+          value: 'trade',
+        } as Prisma.InputJsonValue,
       },
     });
   }
   console.log(`  ✓ Trade price rules: ${tradePriceRules.length}`);
 
-  // ──── Summary Rules ────
-  const summaryRules = [
-    ['vanity-size', 'Size: {{value}}', 1],
-    ['cabinet-finish', 'Finish: {{value}}', 2],
-    ['stone-top', 'Top: {{value}}', 3],
-    ['basin-type', 'Basin: {{value}}', 4],
-    ['basin-position', 'Position: {{value}}', 5],
-    ['tap-holes', 'Tap Holes: {{value}}', 6],
-    ['handle-colour', 'Handle: {{value}}', 7],
-    ['plug-waste', 'Plug & Waste: {{value}}', 8],
+  const summaryRules: SeedSummaryRule[] = [
+    { optionGroupSlug: 'vanity-size', template: 'Size: {{value}}', sortOrder: 1 },
+    { optionGroupSlug: 'cabinet-finish', template: 'Finish: {{value}}', sortOrder: 2 },
+    { optionGroupSlug: 'stone-top', template: 'Top: {{value}}', sortOrder: 3 },
+    { optionGroupSlug: 'basin-type', template: 'Basin: {{value}}', sortOrder: 4 },
+    { optionGroupSlug: 'basin-position', template: 'Position: {{value}}', sortOrder: 5 },
+    { optionGroupSlug: 'tap-holes', template: 'Tap Holes: {{value}}', sortOrder: 6 },
+    { optionGroupSlug: 'handle-colour', template: 'Handle: {{value}}', sortOrder: 7 },
+    { optionGroupSlug: 'plug-waste', template: 'Plug & Waste: {{value}}', sortOrder: 8 },
   ];
 
-  for (const [group, template, order] of summaryRules) {
+  for (const rule of summaryRules) {
     await prisma.summaryRule.create({
       data: {
         productFamilyId: family.id,
-        optionGroupSlug: group as string,
-        template: template as string,
-        sortOrder: order as number,
+        optionGroupSlug: rule.optionGroupSlug,
+        template: rule.template,
+        sortOrder: rule.sortOrder,
       },
     });
   }
   console.log(`  ✓ Summary rules: ${summaryRules.length}`);
 
-  // ──── Components ────
-  const components = [
-    { sku: 'ZV-CAB-MW-600', name: 'Matte White Cabinet 600mm', type: 'CABINET' },
-    { sku: 'ZV-CAB-MW-900', name: 'Matte White Cabinet 900mm', type: 'CABINET' },
-    { sku: 'ZV-CAB-WO-900', name: 'Woodland Oak Cabinet 900mm', type: 'CABINET' },
-    { sku: 'ZV-CAB-WO-1200', name: 'Woodland Oak Cabinet 1200mm', type: 'CABINET' },
-    { sku: 'ZV-TOP-SW-600', name: 'Stone White Top 600mm', type: 'STONE_TOP' },
-    { sku: 'ZV-TOP-SW-900', name: 'Stone White Top 900mm', type: 'STONE_TOP' },
-    { sku: 'ZV-TOP-CAL-900', name: 'Calacatta Quartz Top 900mm', type: 'STONE_TOP' },
-    { sku: 'ZV-TOP-CAL-1200', name: 'Calacatta Quartz Top 1200mm', type: 'STONE_TOP' },
-    { sku: 'ZV-BAS-UM', name: 'Undermount Basin', type: 'BASIN' },
-    { sku: 'ZV-BAS-ACO', name: 'Above Counter Oval Basin', type: 'BASIN' },
-    { sku: 'ZV-BAS-ACR', name: 'Above Counter Rectangle Basin', type: 'BASIN' },
-    { sku: 'ZV-HDL-CH', name: 'Chrome Handle', type: 'HANDLE' },
-    { sku: 'ZV-HDL-MB', name: 'Matte Black Handle', type: 'HANDLE' },
-    { sku: 'ZV-HDL-BN', name: 'Brushed Nickel Handle', type: 'HANDLE' },
-    { sku: 'ZV-HDL-BG', name: 'Brushed Gold Handle', type: 'HANDLE' },
-    { sku: 'ZV-PW-CH-POP', name: 'Chrome Pop-Up Waste', type: 'PLUG_WASTE' },
-    { sku: 'ZV-PW-MB-POP', name: 'Matte Black Pop-Up Waste', type: 'PLUG_WASTE' },
-    { sku: 'ZV-PW-BN-POP', name: 'Brushed Nickel Pop-Up Waste', type: 'PLUG_WASTE' },
+  const components: SeedComponent[] = [
+    { sku: 'ZV-CAB-MW-600', name: 'Matte White Cabinet 600mm', type: ComponentType.CABINET },
+    { sku: 'ZV-CAB-MW-900', name: 'Matte White Cabinet 900mm', type: ComponentType.CABINET },
+    { sku: 'ZV-CAB-WO-900', name: 'Woodland Oak Cabinet 900mm', type: ComponentType.CABINET },
+    { sku: 'ZV-CAB-WO-1200', name: 'Woodland Oak Cabinet 1200mm', type: ComponentType.CABINET },
+    { sku: 'ZV-TOP-SW-600', name: 'Stone White Top 600mm', type: ComponentType.STONE_TOP },
+    { sku: 'ZV-TOP-SW-900', name: 'Stone White Top 900mm', type: ComponentType.STONE_TOP },
+    { sku: 'ZV-TOP-CAL-900', name: 'Calacatta Quartz Top 900mm', type: ComponentType.STONE_TOP },
+    { sku: 'ZV-TOP-CAL-1200', name: 'Calacatta Quartz Top 1200mm', type: ComponentType.STONE_TOP },
+    { sku: 'ZV-BAS-UM', name: 'Undermount Basin', type: ComponentType.BASIN },
+    { sku: 'ZV-BAS-ACO', name: 'Above Counter Oval Basin', type: ComponentType.BASIN },
+    { sku: 'ZV-BAS-ACR', name: 'Above Counter Rectangle Basin', type: ComponentType.BASIN },
+    { sku: 'ZV-HDL-CH', name: 'Chrome Handle', type: ComponentType.HANDLE },
+    { sku: 'ZV-HDL-MB', name: 'Matte Black Handle', type: ComponentType.HANDLE },
+    { sku: 'ZV-HDL-BN', name: 'Brushed Nickel Handle', type: ComponentType.HANDLE },
+    { sku: 'ZV-HDL-BG', name: 'Brushed Gold Handle', type: ComponentType.HANDLE },
+    { sku: 'ZV-PW-CH-POP', name: 'Chrome Pop-Up Waste', type: ComponentType.PLUG_WASTE },
+    { sku: 'ZV-PW-MB-POP', name: 'Matte Black Pop-Up Waste', type: ComponentType.PLUG_WASTE },
+    { sku: 'ZV-PW-BN-POP', name: 'Brushed Nickel Pop-Up Waste', type: ComponentType.PLUG_WASTE },
   ];
 
   const componentRecords: Record<string, string> = {};
   for (const comp of components) {
     const record = await prisma.component.create({
-      data: { productFamilyId: family.id, ...comp, type: comp.type as any },
+      data: {
+        productFamilyId: family.id,
+        sku: comp.sku,
+        name: comp.name,
+        type: comp.type,
+      },
     });
     componentRecords[comp.sku] = record.id;
   }
   console.log(`  ✓ Components: ${components.length}`);
 
-  // ──── Component Maps (subset — full mapping would be extensive) ────
-  const componentMaps = [
-    { conditions: [{ optionGroupSlug: 'vanity-size', optionValueSlug: '900mm' }, { optionGroupSlug: 'cabinet-finish', optionValueSlug: 'woodland-oak' }], sku: 'ZV-CAB-WO-900', qty: 1 },
-    { conditions: [{ optionGroupSlug: 'vanity-size', optionValueSlug: '900mm' }, { optionGroupSlug: 'cabinet-finish', optionValueSlug: 'matte-white' }], sku: 'ZV-CAB-MW-900', qty: 1 },
-    { conditions: [{ optionGroupSlug: 'vanity-size', optionValueSlug: '900mm' }, { optionGroupSlug: 'stone-top', optionValueSlug: 'calacatta-quartz' }], sku: 'ZV-TOP-CAL-900', qty: 1 },
-    { conditions: [{ optionGroupSlug: 'basin-type', optionValueSlug: 'above-counter-oval' }], sku: 'ZV-BAS-ACO', qty: 1 },
-    { conditions: [{ optionGroupSlug: 'basin-type', optionValueSlug: 'undermount' }], sku: 'ZV-BAS-UM', qty: 1 },
-    { conditions: [{ optionGroupSlug: 'handle-colour', optionValueSlug: 'matte-black' }], sku: 'ZV-HDL-MB', qty: 2 },
-    { conditions: [{ optionGroupSlug: 'handle-colour', optionValueSlug: 'chrome' }], sku: 'ZV-HDL-CH', qty: 2 },
-    { conditions: [{ optionGroupSlug: 'handle-colour', optionValueSlug: 'brushed-gold' }], sku: 'ZV-HDL-BG', qty: 2 },
-    { conditions: [{ optionGroupSlug: 'plug-waste', optionValueSlug: 'matte-black-popup' }], sku: 'ZV-PW-MB-POP', qty: 1 },
-    { conditions: [{ optionGroupSlug: 'plug-waste', optionValueSlug: 'chrome-popup' }], sku: 'ZV-PW-CH-POP', qty: 1 },
+  const componentMaps: SeedComponentMap[] = [
+    {
+      conditions: [
+        { optionGroupSlug: 'vanity-size', optionValueSlug: '900mm' },
+        { optionGroupSlug: 'cabinet-finish', optionValueSlug: 'woodland-oak' },
+      ],
+      sku: 'ZV-CAB-WO-900',
+      qty: 1,
+    },
+    {
+      conditions: [
+        { optionGroupSlug: 'vanity-size', optionValueSlug: '900mm' },
+        { optionGroupSlug: 'cabinet-finish', optionValueSlug: 'matte-white' },
+      ],
+      sku: 'ZV-CAB-MW-900',
+      qty: 1,
+    },
+    {
+      conditions: [
+        { optionGroupSlug: 'vanity-size', optionValueSlug: '900mm' },
+        { optionGroupSlug: 'stone-top', optionValueSlug: 'calacatta-quartz' },
+      ],
+      sku: 'ZV-TOP-CAL-900',
+      qty: 1,
+    },
+    {
+      conditions: [{ optionGroupSlug: 'basin-type', optionValueSlug: 'above-counter-oval' }],
+      sku: 'ZV-BAS-ACO',
+      qty: 1,
+    },
+    {
+      conditions: [{ optionGroupSlug: 'basin-type', optionValueSlug: 'undermount' }],
+      sku: 'ZV-BAS-UM',
+      qty: 1,
+    },
+    {
+      conditions: [{ optionGroupSlug: 'handle-colour', optionValueSlug: 'matte-black' }],
+      sku: 'ZV-HDL-MB',
+      qty: 2,
+    },
+    {
+      conditions: [{ optionGroupSlug: 'handle-colour', optionValueSlug: 'chrome' }],
+      sku: 'ZV-HDL-CH',
+      qty: 2,
+    },
+    {
+      conditions: [{ optionGroupSlug: 'handle-colour', optionValueSlug: 'brushed-gold' }],
+      sku: 'ZV-HDL-BG',
+      qty: 2,
+    },
+    {
+      conditions: [{ optionGroupSlug: 'plug-waste', optionValueSlug: 'matte-black-popup' }],
+      sku: 'ZV-PW-MB-POP',
+      qty: 1,
+    },
+    {
+      conditions: [{ optionGroupSlug: 'plug-waste', optionValueSlug: 'chrome-popup' }],
+      sku: 'ZV-PW-CH-POP',
+      qty: 1,
+    },
   ];
 
   for (const map of componentMaps) {
     const compId = componentRecords[map.sku];
     if (!compId) continue;
+
     await prisma.configurationToComponentMap.create({
       data: {
         productFamilyId: family.id,
-        conditions: map.conditions,
+        conditions: map.conditions as Prisma.InputJsonValue,
         componentId: compId,
         quantity: map.qty,
       },
@@ -338,7 +608,6 @@ async function main() {
   }
   console.log(`  ✓ Component maps: ${componentMaps.length}`);
 
-  // ──── Rule Version Snapshot ────
   await prisma.ruleVersion.create({
     data: {
       productFamilyId: family.id,
@@ -353,7 +622,7 @@ async function main() {
         tradePriceRules: tradePriceRules.length,
         summaryRules: summaryRules.length,
         components: components.length,
-      },
+      } as Prisma.InputJsonValue,
     },
   });
   console.log('  ✓ Rule version: v1 published');

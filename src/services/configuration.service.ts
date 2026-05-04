@@ -1,4 +1,5 @@
 import { db } from '@/lib/db';
+import { Prisma } from '@prisma/client';
 import {
   evaluateConfiguration,
   signConfiguration,
@@ -178,7 +179,7 @@ export async function startConfigurationSession(params: {
       shopifyProductId: params.shopifyProductId,
       customerIdent: params.customerIdent,
       isTradeCustomer: params.isTradeCustomer ?? false,
-      selections: defaults,
+      selections: defaults as Prisma.InputJsonValue,
       status: 'ACTIVE',
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h
     },
@@ -230,7 +231,7 @@ export async function evaluateSessionConfiguration(params: {
   await db.configurationSession.update({
     where: { id: params.sessionId },
     data: {
-      selections: params.selections,
+      selections: params.selections as Prisma.InputJsonValue,
       resolvedPrice: result.pricing.totalPrice,
       isTradeCustomer: params.customerContext.isTradeCustomer,
     },
@@ -298,13 +299,15 @@ export async function prepareCartResolution(params: {
           const value = group?.values.find((v) => v.slug === valueSlug);
           return [groupSlug, { slug: valueSlug, name: value?.name ?? valueSlug }];
         })
-      ),
-      pricingBreakdown: result.pricing,
-      mediaState: result.media,
-      componentMappings: result.components.mappings,
-      tradeState: result.pricing.isTradePrice ? { isTradePrice: true } : undefined,
+      ) as Prisma.InputJsonValue,
+      pricingBreakdown: result.pricing as unknown as Prisma.InputJsonValue,
+      mediaState: result.media as unknown as Prisma.InputJsonValue,
+      componentMappings: result.components.mappings as unknown as Prisma.InputJsonValue,
+      tradeState: result.pricing.isTradePrice
+        ? ({ isTradePrice: true } as Prisma.InputJsonValue)
+        : Prisma.JsonNull,
       summaryText: result.summary.humanReadable,
-      summaryStructured: result.summary.structured,
+      summaryStructured: result.summary.structured as unknown as Prisma.InputJsonValue,
       validationSignature,
     },
   });
@@ -324,7 +327,7 @@ export async function prepareCartResolution(params: {
     data: {
       snapshotId: snapshot.id,
       shopifyVariantId: variantId,
-      lineItemProperties: lineItemProperties,
+      lineItemProperties: lineItemProperties as unknown as Prisma.InputJsonValue,
       resolvedPrice: result.pricing.totalPrice,
     },
   });

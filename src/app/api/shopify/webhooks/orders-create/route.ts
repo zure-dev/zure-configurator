@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { Prisma } from '@prisma/client';
 import { verifyWebhookHmac, webhookResponse } from '@/lib/webhooks';
 import { db } from '@/lib/db';
 
@@ -62,7 +63,7 @@ export async function POST(request: NextRequest) {
             shopifyOrderId: orderId,
             shopifyOrderName: orderName,
             shopifyLineItemId: String(lineItem.id),
-            componentSkus: cartResolution.snapshot.componentMappings,
+            componentSkus: cartResolution.snapshot.componentMappings as Prisma.InputJsonValue,
           },
         });
       }

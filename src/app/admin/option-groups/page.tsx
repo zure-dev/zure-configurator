@@ -433,16 +433,9 @@ export default function OptionGroupsPage() {
   }, [deleteTarget, loadData]);
 
   // ── IndexTable ──
-// ── IndexTable ──
-const resourceName = { singular: 'option group', plural: 'option groups' };
-
-const resourceItems = useMemo(
-  () => filteredGroups.map((group) => ({ id: group.id })),
-  [filteredGroups]
-);
-
-const { selectedResources, allResourcesSelected, handleSelectionChange } =
-  useIndexResourceState(resourceItems);
+  const resourceName = { singular: 'option group', plural: 'option groups' };
+  const { selectedResources, allResourcesSelected, handleSelectionChange } =
+    useIndexResourceState(filteredGroups.map((g) => ({ id: g.id })));
 
   // ────────────────────────────────────────────
   // RENDER: Loading
@@ -540,7 +533,7 @@ const { selectedResources, allResourcesSelected, handleSelectionChange } =
 
       <IndexTable.Cell>
         <Text as="span" variant="bodySm">
-          {group.values.length} value{group.values.length !== 1 ? 's' : ''}
+          {`${group.values.length} value${group.values.length !== 1 ? 's' : ''}`}
         </Text>
       </IndexTable.Cell>
 
@@ -548,7 +541,7 @@ const { selectedResources, allResourcesSelected, handleSelectionChange } =
         <InlineStack gap="200">
           {group.isRequired && <Badge tone="info">Required</Badge>}
           {group.stepNumber != null && (
-            <Text as="span" variant="bodySm" tone="subdued">Step {group.stepNumber}</Text>
+            <Text as="span" variant="bodySm" tone="subdued">{`Step ${group.stepNumber}`}</Text>
           )}
         </InlineStack>
       </IndexTable.Cell>
@@ -709,8 +702,7 @@ const { selectedResources, allResourcesSelected, handleSelectionChange } =
               Are you sure you want to delete <strong>{deleteTarget.name}</strong> from {deleteTarget.productFamily.name}?
             </Text>
             <Text as="p" variant="bodySm" tone="subdued">
-              This will also delete all {deleteTarget.values.length} option value{deleteTarget.values.length !== 1 ? 's' : ''} in this group.
-              Any rules referencing this group will break. This cannot be undone.
+              {`This will also delete all ${deleteTarget.values.length} option value${deleteTarget.values.length !== 1 ? 's' : ''} in this group. Any rules referencing this group will break. This cannot be undone.`}
             </Text>
           </BlockStack>
         </Modal.Section>
@@ -738,10 +730,11 @@ const { selectedResources, allResourcesSelected, handleSelectionChange } =
           <Card>
             <InlineStack align="space-between" blockAlign="center">
               <Text as="h2" variant="headingSm">
-                {filteredGroups.length} option group{filteredGroups.length !== 1 ? 's' : ''}
-                {filterFamilyId && families.find((f) => f.id === filterFamilyId)
-                  ? ` in ${families.find((f) => f.id === filterFamilyId)!.name}`
-                  : ' across all families'}
+                {`${filteredGroups.length} option group${filteredGroups.length !== 1 ? 's' : ''}${
+                  filterFamilyId && families.find((f) => f.id === filterFamilyId)
+                    ? ` in ${families.find((f) => f.id === filterFamilyId)!.name}`
+                    : ' across all families'
+                }`}
               </Text>
               <div style={{ width: 250 }}>
                 <Select

@@ -390,8 +390,14 @@ export default function ProductFamiliesPage() {
 
   // ── IndexTable ──
   const resourceName = { singular: 'product family', plural: 'product families' };
-  const { selectedResources, allResourcesSelected, handleSelectionChange } =
-    useIndexResourceState(families);
+
+const resourceItems = useMemo(
+  () => families.map((family) => ({ id: family.id })),
+  [families]
+);
+
+const { selectedResources, allResourcesSelected, handleSelectionChange } =
+  useIndexResourceState(resourceItems);
 
   // ────────────────────────────────────────────
   // RENDER: Loading

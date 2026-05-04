@@ -1,4 +1,5 @@
 import { db } from '@/lib/db';
+import { Prisma } from '@prisma/client';
 import { createAuditLog } from '@/lib/audit';
 import { evaluateRules } from '@/services/rule-engine.service';
 import { calculatePricing } from '@/services/pricing-engine.service';
@@ -227,7 +228,7 @@ export async function prepareCart(
       storeId,
       productFamilyId: input.productFamilyId,
       shopifyProductId: family.shopifyProductId,
-      selections: input.selections,
+      selections: input.selections as Prisma.InputJsonValue,
       resolvedPrice: pricing.total,
       status: 'RESOLVED',
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
@@ -239,14 +240,14 @@ export async function prepareCart(
       sessionId: session.id,
       productFamilyId: input.productFamilyId,
       ruleVersionId: 'live',
-      selections: selectionsWithNames,
-      pricingBreakdown: pricing,
-      mediaState: {},
-      componentMappings: [],
+      selections: selectionsWithNames as unknown as Prisma.InputJsonValue,
+      pricingBreakdown: pricing as unknown as Prisma.InputJsonValue,
+      mediaState: {} as Prisma.InputJsonValue,
+      componentMappings: [] as Prisma.InputJsonValue,
       summaryText: summary.map((l) =>
         l.priceDelta ? `${l.label}: ${l.value} (${l.priceDelta})` : `${l.label}: ${l.value}`
       ).join(' | '),
-      summaryStructured: summary,
+      summaryStructured: summary as unknown as Prisma.InputJsonValue,
       validationSignature: `sha256:${validationSignature}`,
     },
   });
@@ -263,7 +264,7 @@ export async function prepareCart(
     data: {
       snapshotId: snapshot.id,
       shopifyVariantId: variantId ?? 'pending',
-      lineItemProperties: properties,
+      lineItemProperties: properties as Prisma.InputJsonValue,
       resolvedPrice: pricing.total,
     },
   });
