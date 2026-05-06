@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes } from 'crypto';
 
+export const dynamic = 'force-dynamic';
+
 // ──────────────────────────────────────────────
 // GET /api/auth?shop=xxx.myshopify.com
 // Starts the Shopify OAuth install flow.

@@ -124,6 +124,17 @@ function shortDate(iso: string): string {
   }
 }
 
+/**
+ * Wraps fetch to automatically:
+ *   1. Append ?shop= from the current URL (if present)
+ *   2. Send credentials: 'include' so the shopify_shop cookie
+ *      set during OAuth is always sent — even inside the
+ *      cross-origin Shopify admin iframe.
+ *
+ * This means tenant resolution works via BOTH paths:
+ *   - ?shop= query param (primary, when Shopify provides it)
+ *   - shopify_shop cookie (fallback, survives client-side navigation)
+ */
 function apiFetch(path: string, options?: RequestInit): Promise<Response> {
   let shopDomain = '';
   if (typeof window !== 'undefined') {
@@ -132,7 +143,10 @@ function apiFetch(path: string, options?: RequestInit): Promise<Response> {
   }
   const separator = path.includes('?') ? '&' : '?';
   const url = shopDomain ? `${path}${separator}shop=${shopDomain}` : path;
-  return fetch(url, options);
+  return fetch(url, {
+    credentials: 'include',
+    ...options,
+  });
 }
 
 function validateForm(
@@ -391,13 +405,13 @@ export default function ProductFamiliesPage() {
   // ── IndexTable ──
   const resourceName = { singular: 'product family', plural: 'product families' };
 
-const resourceItems = useMemo(
-  () => families.map((family) => ({ id: family.id })),
-  [families]
-);
+  const resourceItems = useMemo(
+    () => families.map((family) => ({ id: family.id })),
+    [families]
+  );
 
-const { selectedResources, allResourcesSelected, handleSelectionChange } =
-  useIndexResourceState(resourceItems);
+  const { selectedResources, allResourcesSelected, handleSelectionChange } =
+    useIndexResourceState(resourceItems);
 
   // ────────────────────────────────────────────
   // RENDER: Loading
@@ -514,7 +528,7 @@ const { selectedResources, allResourcesSelected, handleSelectionChange } =
 
         <IndexTable.Cell>
           <Text as="span" variant="bodySm" tone="subdued">
-            {options} options · {rules} rules · {components} components
+            {`${options} options · ${rules} rules · ${components} components`}
           </Text>
         </IndexTable.Cell>
 

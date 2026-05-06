@@ -13,12 +13,15 @@ export interface TenantContext {
  * Resolution order:
  *   1. x-shopify-shop-domain header (set by App Bridge in production)
  *   2. ?shop= query parameter (set by Shopify when loading the app)
- *   3. DEV_STORE_DOMAIN env var (local development fallback ONLY)
+ *   3. shopify_shop cookie (set by our OAuth callback after install)
+ *   4. DEV_STORE_DOMAIN env var (local development fallback ONLY)
+ *
+ * The cookie (step 3) ensures tenant resolution survives across
+ * page navigations inside the Shopify admin iframe, even when the
+ * ?shop= query param gets dropped during client-side routing.
  *
  * The dev fallback only activates when NODE_ENV !== 'production' AND
- * neither header nor query param provided a shop domain. This means:
- *   - Production: always requires real Shopify auth signals
- *   - Development: works in a plain browser at localhost:3000
+ * none of the other sources provided a shop domain.
  */
 export async function getTenantFromSession(
   request: NextRequest
@@ -31,7 +34,12 @@ export async function getTenantFromSession(
     shopifyDomain = request.nextUrl.searchParams.get('shop');
   }
 
-  // 3. Dev fallback — only in non-production, only when no real auth signal
+  // 3. Try cookie (set by our OAuth callback after successful install)
+  if (!shopifyDomain) {
+    shopifyDomain = request.cookies.get('shopify_shop')?.value ?? null;
+  }
+
+  // 4. Dev fallback — only in non-production, only when no real auth signal
   if (!shopifyDomain && process.env.NODE_ENV !== 'production') {
     shopifyDomain = process.env.DEV_STORE_DOMAIN ?? null;
     if (shopifyDomain) {
@@ -39,14 +47,20 @@ export async function getTenantFromSession(
     }
   }
 
-  if (!shopifyDomain) return null;
+  if (!shopifyDomain) {
+    console.warn('[tenant] No shop domain found in header, query, cookie, or env');
+    return null;
+  }
 
   const store = await db.store.findUnique({
     where: { shopifyDomain },
     select: { id: true, shopifyDomain: true, merchantId: true },
   });
 
-  if (!store) return null;
+  if (!store) {
+    console.warn(`[tenant] Store not found for domain: ${shopifyDomain}`);
+    return null;
+  }
 
   return {
     storeId: store.id,
@@ -58,12 +72,17 @@ export async function getTenantFromSession(
 /**
  * Extract tenant context from a storefront request.
  * Storefront requests come with the shop domain in a header.
- * Same dev fallback applies.
+ * Same cookie and dev fallback applies.
  */
 export async function getTenantFromStorefront(
   request: NextRequest
 ): Promise<TenantContext | null> {
   let shopifyDomain = request.headers.get('x-shop-domain');
+
+  // Fallback to cookie for storefront too
+  if (!shopifyDomain) {
+    shopifyDomain = request.cookies.get('shopify_shop')?.value ?? null;
+  }
 
   if (!shopifyDomain && process.env.NODE_ENV !== 'production') {
     shopifyDomain = process.env.DEV_STORE_DOMAIN ?? null;

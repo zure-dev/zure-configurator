@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { db } from '@/lib/db';
 
+export const dynamic = 'force-dynamic';
+
 // ──────────────────────────────────────────────
 // GET /api/auth/callback?code=...&hmac=...&shop=...&state=...
 // Handles the Shopify OAuth callback after merchant approves.
@@ -117,12 +119,9 @@ export async function GET(request: NextRequest) {
   }
 
   // ── 5. Upsert store record in Prisma ──
-  // Store requires a Merchant parent. Find-or-create a Merchant
-  // keyed on the shop domain (one merchant per store for now).
   try {
     const shopName = shop.replace('.myshopify.com', '');
 
-    // Check if a store already exists for this domain
     const existingStore = await db.store.findUnique({
       where: { shopifyDomain: shop },
     });
@@ -165,18 +164,30 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // ── 6. Clear state cookie and redirect to admin ──
+  // ── 6. Set shop cookie, clear state cookie, redirect to admin ──
   const appUrl = process.env.SHOPIFY_APP_URL ?? '';
   const redirectUrl = `${appUrl}/product-families?shop=${encodeURIComponent(shop)}`;
 
   const response = NextResponse.redirect(redirectUrl);
 
+  // Persist shop domain in a cookie so all subsequent page loads
+  // and API calls can resolve the tenant — even if ?shop= gets
+  // stripped from the URL (which happens inside Shopify iframes).
+  response.cookies.set('shopify_shop', shop, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'none',  // Required: app runs in Shopify iframe (cross-origin)
+    path: '/',
+    maxAge: 60 * 60 * 24 * 30, // 30 days
+  });
+
+  // Clear the OAuth state cookie
   response.cookies.set('shopify_oauth_state', '', {
     httpOnly: true,
     secure: true,
     sameSite: 'lax',
     path: '/api/auth',
-    maxAge: 0, // delete the cookie
+    maxAge: 0,
   });
 
   return response;
@@ -191,7 +202,6 @@ function verifyCallbackHmac(
   receivedHmac: string,
   secret: string
 ): boolean {
-  // Build the message from all query params except hmac, sorted alphabetically
   const params = new URLSearchParams();
 
   for (const [key, value] of searchParams.entries()) {
@@ -200,7 +210,6 @@ function verifyCallbackHmac(
     }
   }
 
-  // Sort by key
   const sortedParams = new URLSearchParams(
     [...params.entries()].sort(([a], [b]) => a.localeCompare(b))
   );
@@ -210,7 +219,6 @@ function verifyCallbackHmac(
     .update(message)
     .digest('hex');
 
-  // Timing-safe comparison using Node built-in
   try {
     const a = Buffer.from(computedHmac, 'hex');
     const b = Buffer.from(receivedHmac, 'hex');
