@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Page,
   Layout,
@@ -18,6 +18,7 @@ import {
   FormLayout,
   TextField,
   Select,
+  Thumbnail,
   useIndexResourceState,
 } from '@shopify/polaris';
 import { useRouter } from 'next/navigation';
@@ -49,7 +50,18 @@ interface ProductFamily {
   updatedAt: string;
 }
 
-interface FormState {
+interface ShopifyProduct {
+  id: string;
+  title: string;
+  handle: string;
+  status: string;
+  featuredImageUrl: string | null;
+  featuredImageAlt: string | null;
+  firstVariantId: string | null;
+  firstVariantPrice: string;
+}
+
+interface ManualFormState {
   name: string;
   handle: string;
   category: string;
@@ -58,12 +70,12 @@ interface FormState {
   description: string;
 }
 
-interface FormErrors {
+interface ManualFormErrors {
   name?: string;
   handle?: string;
 }
 
-const BLANK_FORM: FormState = {
+const BLANK_MANUAL_FORM: ManualFormState = {
   name: '',
   handle: '',
   category: '',
@@ -124,17 +136,6 @@ function shortDate(iso: string): string {
   }
 }
 
-/**
- * Wraps fetch to automatically:
- *   1. Append ?shop= from the current URL (if present)
- *   2. Send credentials: 'include' so the shopify_shop cookie
- *      set during OAuth is always sent — even inside the
- *      cross-origin Shopify admin iframe.
- *
- * This means tenant resolution works via BOTH paths:
- *   - ?shop= query param (primary, when Shopify provides it)
- *   - shopify_shop cookie (fallback, survives client-side navigation)
- */
 function apiFetch(path: string, options?: RequestInit): Promise<Response> {
   let shopDomain = '';
   if (typeof window !== 'undefined') {
@@ -149,17 +150,13 @@ function apiFetch(path: string, options?: RequestInit): Promise<Response> {
   });
 }
 
-function validateForm(
-  form: FormState,
+function validateManualForm(
+  form: ManualFormState,
   families: ProductFamily[],
   editingId: string | null
-): FormErrors {
-  const errors: FormErrors = {};
-
-  if (!form.name.trim()) {
-    errors.name = 'Name is required';
-  }
-
+): ManualFormErrors {
+  const errors: ManualFormErrors = {};
+  if (!form.name.trim()) errors.name = 'Name is required';
   const handle = (form.handle || toHandle(form.name)).trim();
   if (!handle) {
     errors.handle = 'Handle is required';
@@ -171,7 +168,6 @@ function validateForm(
       errors.handle = `Handle "${handle}" is already used by "${conflict.name}"`;
     }
   }
-
   return errors;
 }
 
@@ -182,15 +178,26 @@ function validateForm(
 export default function ProductFamiliesPage() {
   const router = useRouter();
 
-  // ── List ──
+  // ── List state ──
   const [families, setFamilies] = useState<ProductFamily[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
 
-  // ── Form modal (shared for create + edit) ──
-  const [modalOpen, setModalOpen] = useState(false);
+  // ── Shopify picker modal ──
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [shopifyProducts, setShopifyProducts] = useState<ShopifyProduct[]>([]);
+  const [shopifySearch, setShopifySearch] = useState('');
+  const [shopifyLoading, setShopifyLoading] = useState(false);
+  const [shopifyError, setShopifyError] = useState('');
+  const [linking, setLinking] = useState(false);
+  const [linkError, setLinkError] = useState('');
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Manual create/edit modal ──
+  const [manualModalOpen, setManualModalOpen] = useState(false);
   const [editingFamily, setEditingFamily] = useState<ProductFamily | null>(null);
-  const [form, setForm] = useState<FormState>(BLANK_FORM);
+  const [manualForm, setManualForm] = useState<ManualFormState>(BLANK_MANUAL_FORM);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [handleTouched, setHandleTouched] = useState(false);
@@ -201,19 +208,16 @@ export default function ProductFamiliesPage() {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
 
-  // ── Feedback ──
-  const [successMsg, setSuccessMsg] = useState('');
-
   // ── Derived ──
   const isEditMode = editingFamily !== null;
-  const formErrors = useMemo(
-    () => validateForm(form, families, editingFamily?.id ?? null),
-    [form, families, editingFamily]
+  const manualFormErrors = useMemo(
+    () => validateManualForm(manualForm, families, editingFamily?.id ?? null),
+    [manualForm, families, editingFamily]
   );
-  const isFormValid = Object.keys(formErrors).length === 0;
+  const isManualFormValid = Object.keys(manualFormErrors).length === 0;
 
   // ────────────────────────────────────────────
-  // FETCH
+  // FETCH families
   // ────────────────────────────────────────────
 
   const loadFamilies = useCallback(async () => {
@@ -243,21 +247,122 @@ export default function ProductFamiliesPage() {
   }, [successMsg]);
 
   // ────────────────────────────────────────────
-  // MODAL open / close
+  // SHOPIFY PRODUCT PICKER
   // ────────────────────────────────────────────
 
-  const openCreateModal = useCallback(() => {
+  const searchShopifyProducts = useCallback(async (query: string) => {
+    setShopifyLoading(true);
+    setShopifyError('');
+    try {
+      const res = await apiFetch(`/api/shopify/products?query=${encodeURIComponent(query)}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? 'Failed to search products');
+      }
+      const data = await res.json();
+      setShopifyProducts(data.products ?? []);
+    } catch (err) {
+      setShopifyError(err instanceof Error ? err.message : 'Search failed');
+    } finally {
+      setShopifyLoading(false);
+    }
+  }, []);
+
+  const openPicker = useCallback(() => {
+    setPickerOpen(true);
+    setShopifySearch('');
+    setShopifyProducts([]);
+    setShopifyError('');
+    setLinkError('');
+    // Load all products initially
+    searchShopifyProducts('');
+  }, [searchShopifyProducts]);
+
+  const closePicker = useCallback(() => {
+    setPickerOpen(false);
+    setShopifyProducts([]);
+    setShopifySearch('');
+    setLinkError('');
+  }, []);
+
+  const handleSearchChange = useCallback(
+    (value: string) => {
+      setShopifySearch(value);
+      // Debounce search
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = setTimeout(() => {
+        searchShopifyProducts(value);
+      }, 400);
+    },
+    [searchShopifyProducts]
+  );
+
+  const handleSelectProduct = useCallback(
+    async (product: ShopifyProduct) => {
+      setLinking(true);
+      setLinkError('');
+      try {
+        const res = await apiFetch('/api/product-families', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: product.title,
+            handle: product.handle,
+            shopifyProductId: product.id,
+            shopifyVariantId: product.firstVariantId,
+            shopifyProductHandle: product.handle,
+            basePrice: parseFloat(product.firstVariantPrice) || 0,
+            status: 'DRAFT',
+          }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          setLinkError(data.error ?? 'Failed to create product family');
+          return;
+        }
+
+        const familyId = data.family?.id;
+        setPickerOpen(false);
+        setSuccessMsg(`"${product.title}" linked successfully`);
+        await loadFamilies();
+
+        // Navigate to the new product family detail page
+        if (familyId) {
+          const shopParam = typeof window !== 'undefined'
+            ? new URLSearchParams(window.location.search).get('shop') ?? ''
+            : '';
+          const detailUrl = shopParam
+            ? `/product-families/${familyId}?shop=${shopParam}`
+            : `/product-families/${familyId}`;
+          router.push(detailUrl);
+        }
+      } catch (err) {
+        setLinkError(err instanceof Error ? err.message : 'Network error');
+      } finally {
+        setLinking(false);
+      }
+    },
+    [loadFamilies, router]
+  );
+
+  // ────────────────────────────────────────────
+  // MANUAL CREATE/EDIT MODAL
+  // ────────────────────────────────────────────
+
+  const openManualCreate = useCallback(() => {
     setEditingFamily(null);
-    setForm(BLANK_FORM);
+    setManualForm(BLANK_MANUAL_FORM);
     setHandleTouched(false);
     setTouched(new Set());
     setSaveError('');
-    setModalOpen(true);
+    setManualModalOpen(true);
   }, []);
 
   const openEditModal = useCallback((family: ProductFamily) => {
     setEditingFamily(family);
-    setForm({
+    setManualForm({
       name: family.name,
       handle: family.handle || family.slug,
       category: family.category ?? '',
@@ -268,23 +373,19 @@ export default function ProductFamiliesPage() {
     setHandleTouched(true);
     setTouched(new Set());
     setSaveError('');
-    setModalOpen(true);
+    setManualModalOpen(true);
   }, []);
 
-  const closeModal = useCallback(() => {
-    setModalOpen(false);
+  const closeManualModal = useCallback(() => {
+    setManualModalOpen(false);
     setEditingFamily(null);
     setSaveError('');
   }, []);
 
-  // ────────────────────────────────────────────
-  // FORM field handlers
-  // ────────────────────────────────────────────
-
   const setField = useCallback(
-    (field: keyof FormState) => (value: string) => {
+    (field: keyof ManualFormState) => (value: string) => {
       setTouched((prev) => new Set(prev).add(field));
-      setForm((prev) => {
+      setManualForm((prev) => {
         const next = { ...prev, [field]: value };
         if (field === 'name' && !handleTouched) {
           next.handle = toHandle(value);
@@ -298,34 +399,30 @@ export default function ProductFamiliesPage() {
   const setHandleField = useCallback((value: string) => {
     setHandleTouched(true);
     setTouched((prev) => new Set(prev).add('handle'));
-    setForm((prev) => ({ ...prev, handle: value }));
+    setManualForm((prev) => ({ ...prev, handle: value }));
   }, []);
 
   const fieldError = useCallback(
-    (field: keyof FormErrors): string | undefined => {
-      return touched.has(field) ? formErrors[field] : undefined;
+    (field: keyof ManualFormErrors): string | undefined => {
+      return touched.has(field) ? manualFormErrors[field] : undefined;
     },
-    [formErrors, touched]
+    [manualFormErrors, touched]
   );
 
-  // ────────────────────────────────────────────
-  // SAVE (create or update)
-  // ────────────────────────────────────────────
-
-  const handleSave = useCallback(async () => {
+  const handleManualSave = useCallback(async () => {
     setTouched(new Set(['name', 'handle']));
-    if (!isFormValid) return;
+    if (!isManualFormValid) return;
 
     setSaving(true);
     setSaveError('');
 
     const payload: Record<string, unknown> = {
-      name: form.name.trim(),
-      handle: (form.handle || toHandle(form.name)).trim(),
-      status: form.status || 'DRAFT',
-      category: form.category || null,
-      description: form.description.trim() || null,
-      shopifyProductId: form.shopifyProductId.trim() || null,
+      name: manualForm.name.trim(),
+      handle: (manualForm.handle || toHandle(manualForm.name)).trim(),
+      status: manualForm.status || 'DRAFT',
+      category: manualForm.category || null,
+      description: manualForm.description.trim() || null,
+      shopifyProductId: manualForm.shopifyProductId.trim() || null,
     };
 
     try {
@@ -346,10 +443,10 @@ export default function ProductFamiliesPage() {
         return;
       }
 
-      const name = data.family?.name ?? form.name;
-      setModalOpen(false);
+      const name = data.family?.name ?? manualForm.name;
+      setManualModalOpen(false);
       setEditingFamily(null);
-      setForm(BLANK_FORM);
+      setManualForm(BLANK_MANUAL_FORM);
       setHandleTouched(false);
       setTouched(new Set());
       setSuccessMsg(isEditMode ? `"${name}" updated` : `"${name}" created`);
@@ -359,7 +456,7 @@ export default function ProductFamiliesPage() {
     } finally {
       setSaving(false);
     }
-  }, [form, isFormValid, isEditMode, editingFamily, loadFamilies]);
+  }, [manualForm, isManualFormValid, isEditMode, editingFamily, loadFamilies]);
 
   // ────────────────────────────────────────────
   // DELETE
@@ -379,18 +476,13 @@ export default function ProductFamiliesPage() {
     if (!deleteTarget) return;
     setDeleting(true);
     setDeleteError('');
-
     try {
-      const res = await apiFetch(`/api/product-families/${deleteTarget.id}`, {
-        method: 'DELETE',
-      });
-
+      const res = await apiFetch(`/api/product-families/${deleteTarget.id}`, { method: 'DELETE' });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         setDeleteError(body.error ?? 'Failed to delete');
         return;
       }
-
       const name = deleteTarget.name;
       setDeleteTarget(null);
       setSuccessMsg(`"${name}" deleted`);
@@ -404,14 +496,21 @@ export default function ProductFamiliesPage() {
 
   // ── IndexTable ──
   const resourceName = { singular: 'product family', plural: 'product families' };
-
   const resourceItems = useMemo(
     () => families.map((family) => ({ id: family.id })),
     [families]
   );
-
   const { selectedResources, allResourcesSelected, handleSelectionChange } =
     useIndexResourceState(resourceItems);
+
+  // ────────────────────────────────────────────
+  // Helpers: which Shopify products are already linked
+  // ────────────────────────────────────────────
+
+  const linkedShopifyIds = useMemo(
+    () => new Set(families.map((f) => f.shopifyProductId).filter(Boolean)),
+    [families]
+  );
 
   // ────────────────────────────────────────────
   // RENDER: Loading
@@ -433,10 +532,6 @@ export default function ProductFamiliesPage() {
     );
   }
 
-  // ────────────────────────────────────────────
-  // RENDER: Fetch error
-  // ────────────────────────────────────────────
-
   if (fetchError) {
     return (
       <Page title="Product Families">
@@ -456,7 +551,7 @@ export default function ProductFamiliesPage() {
   }
 
   // ────────────────────────────────────────────
-  // RENDER: Empty
+  // RENDER: Empty state
   // ────────────────────────────────────────────
 
   if (families.length === 0 && !successMsg) {
@@ -466,19 +561,21 @@ export default function ProductFamiliesPage() {
           <Layout.Section>
             <Card>
               <EmptyState
-                heading="No product families yet"
-                action={{ content: 'Create product family', onAction: openCreateModal }}
+                heading="Link your first Shopify product"
+                action={{ content: 'Link Shopify Product', onAction: openPicker }}
+                secondaryAction={{ content: 'Create manually', onAction: openManualCreate }}
                 image=""
               >
                 <p>
-                  Product families define the configurable products in your store.
-                  Create your first one to get started.
+                  Select a product from your Shopify store to start building
+                  configurator options, rules, and pricing.
                 </p>
               </EmptyState>
             </Card>
           </Layout.Section>
         </Layout>
-        {renderFormModal()}
+        {renderPickerModal()}
+        {renderManualModal()}
       </Page>
     );
   }
@@ -553,25 +650,145 @@ export default function ProductFamiliesPage() {
   });
 
   // ────────────────────────────────────────────
-  // RENDER: Create / Edit modal
+  // RENDER: Shopify product picker modal
   // ────────────────────────────────────────────
 
-  function renderFormModal() {
-    const title = isEditMode ? `Edit: ${editingFamily!.name}` : 'Create Product Family';
+  function renderPickerModal() {
+    return (
+      <Modal
+        open={pickerOpen}
+        onClose={closePicker}
+        title="Link a Shopify Product"
+      >
+        <Modal.Section>
+          {linkError && (
+            <div style={{ marginBottom: 16 }}>
+              <Banner tone="critical" onDismiss={() => setLinkError('')}>
+                {linkError}
+              </Banner>
+            </div>
+          )}
+
+          <BlockStack gap="400">
+            <TextField
+              label="Search products"
+              value={shopifySearch}
+              onChange={handleSearchChange}
+              placeholder="Search by product name..."
+              autoComplete="off"
+              clearButton
+              onClearButtonClick={() => handleSearchChange('')}
+            />
+
+            {shopifyLoading && (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '20px 0' }}>
+                <Spinner size="small" />
+              </div>
+            )}
+
+            {shopifyError && (
+              <Banner tone="critical">
+                {shopifyError}
+              </Banner>
+            )}
+
+            {!shopifyLoading && shopifyProducts.length === 0 && !shopifyError && (
+              <Text as="p" variant="bodySm" tone="subdued">
+                No products found. Try a different search term.
+              </Text>
+            )}
+
+            {!shopifyLoading && shopifyProducts.length > 0 && (
+              <BlockStack gap="200">
+                {shopifyProducts.map((product) => {
+                  const alreadyLinked = linkedShopifyIds.has(product.id);
+
+                  return (
+                    <div
+                      key={product.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px',
+                        padding: '12px',
+                        borderRadius: '8px',
+                        border: '1px solid var(--p-color-border-subdued, #ddd)',
+                        opacity: alreadyLinked ? 0.5 : 1,
+                        cursor: alreadyLinked || linking ? 'default' : 'pointer',
+                        background: alreadyLinked
+                          ? 'var(--p-color-bg-surface-secondary, #f6f6f7)'
+                          : 'transparent',
+                      }}
+                      onClick={() => {
+                        if (!alreadyLinked && !linking) {
+                          handleSelectProduct(product);
+                        }
+                      }}
+                    >
+                      <Thumbnail
+                        source={product.featuredImageUrl ?? ''}
+                        alt={product.featuredImageAlt ?? product.title}
+                        size="small"
+                      />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <Text as="span" variant="bodyMd" fontWeight="semibold">
+                          {product.title}
+                        </Text>
+                        <div style={{ display: 'flex', gap: '8px', marginTop: '2px', flexWrap: 'wrap' }}>
+                          <Text as="span" variant="bodySm" tone="subdued">
+                            {product.handle}
+                          </Text>
+                          <Badge tone={product.status === 'ACTIVE' ? 'success' : undefined}>
+                            {product.status}
+                          </Badge>
+                          {alreadyLinked && (
+                            <Badge tone="info">Already linked</Badge>
+                          )}
+                        </div>
+                      </div>
+                      <Text as="span" variant="bodySm" tone="subdued">
+                        {`$${parseFloat(product.firstVariantPrice).toFixed(2)}`}
+                      </Text>
+                    </div>
+                  );
+                })}
+              </BlockStack>
+            )}
+          </BlockStack>
+        </Modal.Section>
+
+        {linking && (
+          <Modal.Section>
+            <InlineStack gap="200" blockAlign="center">
+              <Spinner size="small" />
+              <Text as="span" variant="bodySm">Linking product...</Text>
+            </InlineStack>
+          </Modal.Section>
+        )}
+      </Modal>
+    );
+  }
+
+  // ────────────────────────────────────────────
+  // RENDER: Manual create/edit modal
+  // ────────────────────────────────────────────
+
+  function renderManualModal() {
+    const title = isEditMode ? `Edit: ${editingFamily!.name}` : 'Create Product Family (Manual)';
     const submitLabel = isEditMode ? 'Save changes' : 'Create';
 
     return (
       <Modal
-        open={modalOpen}
-        onClose={closeModal}
+        open={manualModalOpen}
+        onClose={closeManualModal}
         title={title}
         primaryAction={{
           content: submitLabel,
-          onAction: handleSave,
+          onAction: handleManualSave,
           loading: saving,
-          disabled: saving || (touched.size > 0 && !isFormValid),
+          disabled: saving || (touched.size > 0 && !isManualFormValid),
         }}
-        secondaryActions={[{ content: 'Cancel', onAction: closeModal }]}
+        secondaryActions={[{ content: 'Cancel', onAction: closeManualModal }]}
       >
         <Modal.Section>
           {saveError && (
@@ -585,7 +802,7 @@ export default function ProductFamiliesPage() {
           <FormLayout>
             <TextField
               label="Name"
-              value={form.name}
+              value={manualForm.name}
               onChange={setField('name')}
               placeholder="e.g. Zure Vanity 600-1500mm"
               helpText="Display name for this product family"
@@ -596,7 +813,7 @@ export default function ProductFamiliesPage() {
 
             <TextField
               label="Handle"
-              value={form.handle}
+              value={manualForm.handle}
               onChange={setHandleField}
               placeholder="e.g. zure-vanity-600-1500mm"
               helpText={
@@ -612,7 +829,7 @@ export default function ProductFamiliesPage() {
             <Select
               label="Category"
               options={CATEGORY_OPTIONS}
-              value={form.category}
+              value={manualForm.category}
               onChange={setField('category')}
               helpText="Used to group and filter product families"
             />
@@ -620,13 +837,13 @@ export default function ProductFamiliesPage() {
             <Select
               label="Status"
               options={STATUS_OPTIONS}
-              value={form.status}
+              value={manualForm.status}
               onChange={setField('status')}
             />
 
             <TextField
               label="Shopify Product ID"
-              value={form.shopifyProductId}
+              value={manualForm.shopifyProductId}
               onChange={setField('shopifyProductId')}
               placeholder="e.g. gid://shopify/Product/123456789"
               helpText="Optional. Link to the parent Shopify product."
@@ -635,7 +852,7 @@ export default function ProductFamiliesPage() {
 
             <TextField
               label="Description"
-              value={form.description}
+              value={manualForm.description}
               onChange={setField('description')}
               placeholder="Brief description of this configurable product..."
               multiline={3}
@@ -648,7 +865,7 @@ export default function ProductFamiliesPage() {
   }
 
   // ────────────────────────────────────────────
-  // RENDER: Delete confirmation modal
+  // RENDER: Delete modal
   // ────────────────────────────────────────────
 
   function renderDeleteModal() {
@@ -698,9 +915,12 @@ export default function ProductFamiliesPage() {
     <Page
       title="Product Families"
       primaryAction={{
-        content: 'Create product family',
-        onAction: openCreateModal,
+        content: 'Link Shopify Product',
+        onAction: openPicker,
       }}
+      secondaryActions={[
+        { content: 'Create manually', onAction: openManualCreate },
+      ]}
     >
       <Layout>
         {successMsg && (
@@ -737,7 +957,8 @@ export default function ProductFamiliesPage() {
         </Layout.Section>
       </Layout>
 
-      {renderFormModal()}
+      {renderPickerModal()}
+      {renderManualModal()}
       {renderDeleteModal()}
     </Page>
   );
