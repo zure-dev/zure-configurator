@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { getTenantFromSession, tenantResponse, tenantError } from '@/lib/tenant';
 import { listAllRules, RuleError } from '@/services/rule.service';
 
+export const dynamic = 'force-dynamic';
+
 // GET /api/rules?familyId=xxx
 // Returns both dependency and exclusion rules for a product family
 export async function GET(request: NextRequest) {

@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { getTenantFromSession, tenantResponse, tenantError } from '@/lib/tenant';
 import { db } from '@/lib/db';
 
+export const dynamic = 'force-dynamic';
+
 // GET /api/audit?page=1&limit=50&entityType=ProductFamily&entityId=xxx
 export async function GET(request: NextRequest) {
   try {
