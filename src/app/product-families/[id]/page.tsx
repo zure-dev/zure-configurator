@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Page,
   Layout,
@@ -18,7 +18,7 @@ import {
   Select,
   Checkbox,
   Divider,
-  Box,
+  DropZone,
 } from '@shopify/polaris';
 import { useParams, useRouter } from 'next/navigation';
 
@@ -112,6 +112,13 @@ const DISPLAY_TYPE_OPTIONS = [
   { label: 'Toggle', value: 'TOGGLE' },
 ];
 
+// Common swatch presets for quick selection
+const COLOR_PRESETS = [
+  '#FFFFFF', '#F5F5DC', '#D2B48C', '#8B6914', '#4A3728',
+  '#2C2C2C', '#000000', '#808080', '#C0C0C0', '#B5651D',
+  '#556B2F', '#1E3A5F', '#8B0000', '#4B0082', '#CD853F',
+];
+
 // ──────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────
@@ -136,6 +143,10 @@ function displayTypeBadge(dt: string) {
     SWATCH: 'success', TILE: 'info', THUMBNAIL: 'attention',
   };
   return <Badge tone={tones[dt]}>{dt}</Badge>;
+}
+
+function isValidHex(color: string): boolean {
+  return /^#([0-9A-Fa-f]{3}){1,2}$/.test(color);
 }
 
 // ──────────────────────────────────────────────
@@ -170,6 +181,13 @@ export default function ProductFamilyBuilderPage() {
   const [valueSaving, setValueSaving] = useState(false);
   const [valueError, setValueError] = useState('');
   const [valueSlugTouched, setValueSlugTouched] = useState(false);
+
+  // ── Image upload state ──
+  const [imageUploading, setImageUploading] = useState(false);
+  const [imageUploadError, setImageUploadError] = useState('');
+
+  // ── Color picker state ──
+  const [showColorPicker, setShowColorPicker] = useState(false);
 
   // ── Delete ──
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'group' | 'value'; id: string; name: string } | null>(null);
@@ -222,6 +240,51 @@ export default function ProductFamilyBuilderPage() {
   }, [successMsg]);
 
   // ────────────────────────────────────────────
+  // IMAGE UPLOAD
+  // ────────────────────────────────────────────
+
+  const handleImageUpload = useCallback(async (file: File) => {
+    setImageUploading(true);
+    setImageUploadError('');
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await apiFetch('/api/media/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setImageUploadError(data.error ?? 'Upload failed');
+        return;
+      }
+
+      // Set the uploaded URL into the form
+      setValueForm((prev) => ({ ...prev, thumbnailUrl: data.url }));
+    } catch (err) {
+      setImageUploadError(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setImageUploading(false);
+    }
+  }, []);
+
+  const handleDropZoneDrop = useCallback(
+    (_dropFiles: File[], acceptedFiles: File[]) => {
+      const file = acceptedFiles[0];
+      if (!file) return;
+      handleImageUpload(file);
+    },
+    [handleImageUpload]
+  );
+
+  const removeImage = useCallback(() => {
+    setValueForm((prev) => ({ ...prev, thumbnailUrl: '' }));
+    setImageUploadError('');
+  }, []);
+
+  // ────────────────────────────────────────────
   // GROUP CRUD
   // ────────────────────────────────────────────
 
@@ -268,7 +331,9 @@ export default function ProductFamilyBuilderPage() {
 
     try {
       const isEdit = editingGroup !== null;
-      const url = isEdit ? `/api/options/${editingGroup!.id}` : '/api/options';
+      const url = isEdit
+        ? `/api/options/${editingGroup?.id ?? ''}`
+        : '/api/options';
       const res = await apiFetch(url, {
         method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -298,6 +363,8 @@ export default function ProductFamilyBuilderPage() {
     setValueForm({ ...BLANK_VALUE, sortOrder: String(group?.values.length ?? 0) });
     setValueSlugTouched(false);
     setValueError('');
+    setImageUploadError('');
+    setShowColorPicker(false);
     setValueModalOpen(true);
   }, [groups]);
 
@@ -315,6 +382,8 @@ export default function ProductFamilyBuilderPage() {
     });
     setValueSlugTouched(true);
     setValueError('');
+    setImageUploadError('');
+    setShowColorPicker(false);
     setValueModalOpen(true);
   }, []);
 
@@ -338,7 +407,9 @@ export default function ProductFamilyBuilderPage() {
     if (valueForm.sortOrder) payload.sortOrder = parseInt(valueForm.sortOrder, 10);
 
     try {
-      const url = isEdit ? `/api/option-values/${editingValue!.id}` : '/api/option-values';
+      const url = isEdit
+        ? `/api/option-values/${editingValue?.id ?? ''}`
+        : '/api/option-values';
       const res = await apiFetch(url, {
         method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -463,8 +534,12 @@ export default function ProductFamilyBuilderPage() {
                     padding: '8px 16px',
                     borderRadius: '6px',
                     cursor: 'pointer',
-                    border: selected ? '2px solid var(--p-color-border-interactive, #2c6ecb)' : '1px solid var(--p-color-border-subdued, #ddd)',
-                    background: selected ? 'var(--p-color-bg-surface-selected, #f0f5ff)' : 'transparent',
+                    border: selected
+                      ? '2px solid var(--p-color-border-interactive, #2c6ecb)'
+                      : '1px solid var(--p-color-border-subdued, #ddd)',
+                    background: selected
+                      ? 'var(--p-color-bg-surface-selected, #f0f5ff)'
+                      : 'transparent',
                     textAlign: 'center' as const,
                     minWidth: '60px',
                     transition: 'all 0.15s ease',
@@ -472,18 +547,15 @@ export default function ProductFamilyBuilderPage() {
 
                   if (group.displayType === 'SWATCH' && val.swatchColor) {
                     return (
-                      <div
-                        key={val.id}
+                      <div key={val.id}
                         onClick={() => setPreviewSelections((prev) => ({ ...prev, [group.slug]: val.slug }))}
-                        style={{
-                          ...baseStyle,
-                          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', padding: '6px',
-                        }}
+                        style={{ ...baseStyle, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', padding: '6px' }}
                       >
                         <div style={{
                           width: 32, height: 32, borderRadius: '50%',
                           background: val.swatchColor,
-                          border: '1px solid #ccc',
+                          border: selected ? '2px solid #2c6ecb' : '1px solid #ccc',
+                          boxShadow: selected ? '0 0 0 2px rgba(44,110,203,0.3)' : 'none',
                         }} />
                         <Text as="span" variant="bodySm">{val.name}</Text>
                       </div>
@@ -492,14 +564,11 @@ export default function ProductFamilyBuilderPage() {
 
                   if ((group.displayType === 'THUMBNAIL' || group.displayType === 'TILE') && val.thumbnailUrl) {
                     return (
-                      <div
-                        key={val.id}
+                      <div key={val.id}
                         onClick={() => setPreviewSelections((prev) => ({ ...prev, [group.slug]: val.slug }))}
                         style={{ ...baseStyle, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', padding: '6px' }}
                       >
-                        <img
-                          src={val.thumbnailUrl}
-                          alt={val.name}
+                        <img src={val.thumbnailUrl} alt={val.name}
                           style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 4 }}
                         />
                         <Text as="span" variant="bodySm">{val.name}</Text>
@@ -508,8 +577,7 @@ export default function ProductFamilyBuilderPage() {
                   }
 
                   return (
-                    <div
-                      key={val.id}
+                    <div key={val.id}
                       onClick={() => setPreviewSelections((prev) => ({ ...prev, [group.slug]: val.slug }))}
                       style={baseStyle}
                     >
@@ -542,7 +610,7 @@ export default function ProductFamilyBuilderPage() {
             <BlockStack gap="200">
               <Text as="p" variant="bodyMd">No option groups yet.</Text>
               <Text as="p" variant="bodySm" tone="subdued">
-                Create your first option group (e.g. "Vanity Size", "Cabinet Finish") to start building the configurator.
+                Create your first option group (e.g. &quot;Vanity Size&quot;, &quot;Cabinet Finish&quot;) to start building the configurator.
               </Text>
             </BlockStack>
           </Card>
@@ -551,7 +619,6 @@ export default function ProductFamilyBuilderPage() {
         {groups.map((group) => (
           <Card key={group.id}>
             <BlockStack gap="300">
-              {/* Group header */}
               <InlineStack align="space-between" blockAlign="center">
                 <InlineStack gap="200" blockAlign="center">
                   <Text as="span" variant="bodyMd" fontWeight="bold">{group.name}</Text>
@@ -573,7 +640,6 @@ export default function ProductFamilyBuilderPage() {
 
               <Divider />
 
-              {/* Values */}
               <BlockStack gap="200">
                 <InlineStack align="space-between" blockAlign="center">
                   <Text as="span" variant="bodySm" fontWeight="semibold">
@@ -584,22 +650,16 @@ export default function ProductFamilyBuilderPage() {
 
                 {group.values.length === 0 && (
                   <Text as="p" variant="bodySm" tone="subdued">
-                    No values yet. Add options like "600mm", "900mm", "Woodland Oak"...
+                    No values yet. Add options like &quot;600mm&quot;, &quot;900mm&quot;, &quot;Woodland Oak&quot;...
                   </Text>
                 )}
 
                 {group.values.map((val) => (
-                  <div
-                    key={val.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '8px 12px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--p-color-border-subdued, #e1e3e5)',
-                    }}
-                  >
+                  <div key={val.id} style={{
+                    display: 'flex', alignItems: 'center', gap: '8px',
+                    padding: '8px 12px', borderRadius: '6px',
+                    border: '1px solid var(--p-color-border-subdued, #e1e3e5)',
+                  }}>
                     {val.swatchColor && (
                       <div style={{
                         width: 20, height: 20, borderRadius: '50%',
@@ -641,7 +701,7 @@ export default function ProductFamilyBuilderPage() {
       <Modal
         open={groupModalOpen}
         onClose={() => setGroupModalOpen(false)}
-        title={isEdit ? `Edit: ${editingGroup!.name}` : 'Add Option Group'}
+        title={isEdit ? `Edit: ${editingGroup?.name ?? ''}` : 'Add Option Group'}
         primaryAction={{
           content: isEdit ? 'Save' : 'Add',
           onAction: saveGroup,
@@ -658,7 +718,7 @@ export default function ProductFamilyBuilderPage() {
           )}
           <FormLayout>
             <TextField label="Name" value={groupForm.name} autoComplete="off" requiredIndicator
-              onChange={(v) => {
+              onChange={(v: string) => {
                 setGroupForm((p) => ({
                   ...p, name: v,
                   ...(groupSlugTouched ? {} : { slug: toSlug(v) }),
@@ -667,27 +727,26 @@ export default function ProductFamilyBuilderPage() {
               placeholder="e.g. Vanity Size"
             />
             <TextField label="Slug" value={groupForm.slug} autoComplete="off"
-              onChange={(v) => { setGroupSlugTouched(true); setGroupForm((p) => ({ ...p, slug: v })); }}
+              onChange={(v: string) => { setGroupSlugTouched(true); setGroupForm((p) => ({ ...p, slug: v })); }}
               helpText="URL-safe identifier. Auto-generated from name."
             />
             <Select label="Display Type" options={DISPLAY_TYPE_OPTIONS}
               value={groupForm.displayType}
-              onChange={(v) => setGroupForm((p) => ({ ...p, displayType: v }))}
+              onChange={(v: string) => setGroupForm((p) => ({ ...p, displayType: v }))}
             />
             <Checkbox label="Required" checked={groupForm.isRequired}
-              onChange={(v) => setGroupForm((p) => ({ ...p, isRequired: v }))}
-            />
+              onChange={(v: boolean) => setGroupForm((p) => ({ ...p, isRequired: v }))}            />
             <FormLayout.Group>
               <TextField label="Sort Order" value={groupForm.sortOrder} type="number" autoComplete="off"
-                onChange={(v) => setGroupForm((p) => ({ ...p, sortOrder: v }))}
+                onChange={(v: string) => setGroupForm((p) => ({ ...p, sortOrder: v }))}
               />
               <TextField label="Step Number" value={groupForm.stepNumber} type="number" autoComplete="off"
-                onChange={(v) => setGroupForm((p) => ({ ...p, stepNumber: v }))}
+                onChange={(v: string) => setGroupForm((p) => ({ ...p, stepNumber: v }))}
                 placeholder="Optional"
               />
             </FormLayout.Group>
             <TextField label="Helper Text" value={groupForm.helperText} autoComplete="off"
-              onChange={(v) => setGroupForm((p) => ({ ...p, helperText: v }))}
+              onChange={(v: string) => setGroupForm((p) => ({ ...p, helperText: v }))}
               placeholder="Shown below the group name"
             />
           </FormLayout>
@@ -697,16 +756,19 @@ export default function ProductFamilyBuilderPage() {
   }
 
   // ────────────────────────────────────────────
-  // RENDER: Value modal
+  // RENDER: Value modal (with image upload + color picker)
   // ────────────────────────────────────────────
 
   function renderValueModal() {
     const isEdit = editingValue !== null;
+    const hasImage = !!valueForm.thumbnailUrl;
+    const hasColor = !!valueForm.swatchColor && isValidHex(valueForm.swatchColor);
+
     return (
       <Modal
         open={valueModalOpen}
         onClose={() => setValueModalOpen(false)}
-        title={isEdit ? `Edit: ${editingValue!.name}` : 'Add Option Value'}
+        title={isEdit ? `Edit: ${editingValue?.name ?? ''}` : 'Add Option Value'}
         primaryAction={{
           content: isEdit ? 'Save' : 'Add',
           onAction: saveValue,
@@ -722,8 +784,9 @@ export default function ProductFamilyBuilderPage() {
             </div>
           )}
           <FormLayout>
+            {/* ── Name + Slug ── */}
             <TextField label="Name" value={valueForm.name} autoComplete="off" requiredIndicator
-              onChange={(v) => {
+              onChange={(v: string) => {
                 setValueForm((p) => ({
                   ...p, name: v,
                   ...(valueSlugTouched ? {} : { slug: toSlug(v) }),
@@ -732,28 +795,182 @@ export default function ProductFamilyBuilderPage() {
               placeholder="e.g. 900mm, Woodland Oak"
             />
             <TextField label="Slug" value={valueForm.slug} autoComplete="off"
-              onChange={(v) => { setValueSlugTouched(true); setValueForm((p) => ({ ...p, slug: v })); }}
+              onChange={(v: string) => { setValueSlugTouched(true); setValueForm((p) => ({ ...p, slug: v })); }}
+              helpText="Auto-generated from name"
             />
-            <TextField label="Sort Order" value={valueForm.sortOrder} type="number" autoComplete="off"
-              onChange={(v) => setValueForm((p) => ({ ...p, sortOrder: v }))}
-            />
-            <Checkbox label="Default selection" checked={valueForm.isDefault}
-              onChange={(v) => setValueForm((p) => ({ ...p, isDefault: v }))}
-            />
-            <TextField label="Swatch Color" value={valueForm.swatchColor} autoComplete="off"
-              onChange={(v) => setValueForm((p) => ({ ...p, swatchColor: v }))}
-              placeholder="#8B6914"
-              helpText="Hex color for swatch display type"
-            />
-            <TextField label="Thumbnail URL" value={valueForm.thumbnailUrl} autoComplete="off"
-              onChange={(v) => setValueForm((p) => ({ ...p, thumbnailUrl: v }))}
-              placeholder="https://..."
-            />
-            <TextField label="Description" value={valueForm.description} autoComplete="off" multiline={2}
-              onChange={(v) => setValueForm((p) => ({ ...p, description: v }))}
-              placeholder="Short description for tooltip"
-            />
+
+            <FormLayout.Group>
+              <TextField label="Sort Order" value={valueForm.sortOrder} type="number" autoComplete="off"
+                onChange={(v: string) => setValueForm((p) => ({ ...p, sortOrder: v }))}
+              />
+              <div style={{ paddingTop: 24 }}>
+                <Checkbox label="Default selection" checked={valueForm.isDefault}
+                  onChange={(v: boolean) => setValueForm((p) => ({ ...p, isDefault: v }))}                />
+              </div>
+            </FormLayout.Group>
           </FormLayout>
+        </Modal.Section>
+
+        {/* ── Image Upload Section ── */}
+        <Modal.Section>
+          <BlockStack gap="300">
+            <Text as="span" variant="bodyMd" fontWeight="semibold">Image</Text>
+
+            {hasImage ? (
+              <InlineStack gap="300" blockAlign="center">
+                <div style={{
+                  width: 80, height: 80, borderRadius: 8, overflow: 'hidden',
+                  border: '1px solid var(--p-color-border-subdued, #ddd)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: '#f6f6f7',
+                }}>
+                  <img src={valueForm.thumbnailUrl} alt="Preview"
+                    style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'cover' }}
+                  />
+                </div>
+                <BlockStack gap="100">
+                  <Text as="span" variant="bodySm" tone="subdued">
+                    Image uploaded
+                  </Text>
+                  <InlineStack gap="200">
+                    <Button size="slim" variant="plain" tone="critical" onClick={removeImage}>
+                      Remove
+                    </Button>
+                  </InlineStack>
+                </BlockStack>
+              </InlineStack>
+            ) : (
+              <DropZone
+                accept="image/*"
+                type="image"
+                onDrop={handleDropZoneDrop}
+                allowMultiple={false}
+                variableHeight
+              >
+                {imageUploading ? (
+                  <div style={{ padding: '20px', display: 'flex', justifyContent: 'center' }}>
+                    <InlineStack gap="200" blockAlign="center">
+                      <Spinner size="small" />
+                      <Text as="span" variant="bodySm">Uploading...</Text>
+                    </InlineStack>
+                  </div>
+                ) : (
+                  <DropZone.FileUpload
+                    actionTitle="Upload image"
+                    actionHint="or drag and drop (JPEG, PNG, WebP, GIF — max 5MB)"
+                  />
+                )}
+              </DropZone>
+            )}
+
+            {imageUploadError && (
+              <Banner tone="critical" onDismiss={() => setImageUploadError('')}>
+                {imageUploadError}
+              </Banner>
+            )}
+
+            {/* Manual URL fallback — collapsed by default */}
+            {!hasImage && (
+              <TextField label="Or paste image URL" value={valueForm.thumbnailUrl} autoComplete="off"
+                onChange={(v: string) => setValueForm((p) => ({ ...p, thumbnailUrl: v }))}
+                placeholder="https://..."
+                labelHidden={false}
+              />
+            )}
+          </BlockStack>
+        </Modal.Section>
+
+        {/* ── Swatch Color Section ── */}
+        <Modal.Section>
+          <BlockStack gap="300">
+            <Text as="span" variant="bodyMd" fontWeight="semibold">Swatch Color</Text>
+
+            {/* Live preview + hex input side by side */}
+            <InlineStack gap="300" blockAlign="center">
+              <div
+                onClick={() => setShowColorPicker((prev) => !prev)}
+                style={{
+                  width: 40, height: 40, borderRadius: 8, cursor: 'pointer',
+                  background: hasColor ? valueForm.swatchColor : 'linear-gradient(135deg, #f0f0f0 25%, #ddd 25%, #ddd 50%, #f0f0f0 50%, #f0f0f0 75%, #ddd 75%)',
+                  backgroundSize: hasColor ? undefined : '8px 8px',
+                  border: '2px solid var(--p-color-border-subdued, #ccc)',
+                  boxShadow: hasColor ? `0 2px 8px ${valueForm.swatchColor}40` : 'none',
+                  transition: 'all 0.15s ease',
+                }}
+                title="Click to open color picker"
+              />
+              <div style={{ flex: 1 }}>
+                <TextField label="Hex color" value={valueForm.swatchColor} autoComplete="off"
+                  onChange={(v: string) => setValueForm((p) => ({ ...p, swatchColor: v }))}
+                  placeholder="#8B6914"
+                  labelHidden
+                  prefix="#"
+                  error={valueForm.swatchColor && !isValidHex(valueForm.swatchColor.startsWith('#') ? valueForm.swatchColor : `#${valueForm.swatchColor}`)
+                    ? 'Invalid hex color'
+                    : undefined
+                  }
+                />
+              </div>
+              {hasColor && (
+                <Button size="slim" variant="plain" tone="critical"
+                  onClick={() => setValueForm((p) => ({ ...p, swatchColor: '' }))}
+                >
+                  Clear
+                </Button>
+              )}
+            </InlineStack>
+
+            {/* Color picker grid */}
+            {showColorPicker && (
+              <BlockStack gap="200">
+                <Text as="span" variant="bodySm" tone="subdued">Quick select</Text>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {COLOR_PRESETS.map((color) => (
+                    <div
+                      key={color}
+                      onClick={() => {
+                        setValueForm((p) => ({ ...p, swatchColor: color }));
+                        setShowColorPicker(false);
+                      }}
+                      style={{
+                        width: 28, height: 28, borderRadius: 6, cursor: 'pointer',
+                        background: color,
+                        border: valueForm.swatchColor === color
+                          ? '2px solid #2c6ecb'
+                          : '1px solid #ccc',
+                        transition: 'transform 0.1s ease',
+                      }}
+                      title={color}
+                      onMouseEnter={(e) => { (e.target as HTMLElement).style.transform = 'scale(1.15)'; }}
+                      onMouseLeave={(e) => { (e.target as HTMLElement).style.transform = 'scale(1)'; }}
+                    />
+                  ))}
+                </div>
+
+                {/* Native color input for full spectrum */}
+                <InlineStack gap="200" blockAlign="center">
+                  <Text as="span" variant="bodySm" tone="subdued">Custom:</Text>
+                  <input
+                    type="color"
+                    value={hasColor ? valueForm.swatchColor : '#000000'}
+                    onChange={(e) => setValueForm((p) => ({ ...p, swatchColor: e.target.value }))}
+                    style={{
+                      width: 36, height: 28, border: 'none', borderRadius: 4,
+                      cursor: 'pointer', padding: 0, background: 'transparent',
+                    }}
+                  />
+                </InlineStack>
+              </BlockStack>
+            )}
+          </BlockStack>
+        </Modal.Section>
+
+        {/* ── Description ── */}
+        <Modal.Section>
+          <TextField label="Description" value={valueForm.description} autoComplete="off" multiline={2}
+            onChange={(v: string) => setValueForm((p) => ({ ...p, description: v }))}
+            placeholder="Short description shown as tooltip"
+          />
         </Modal.Section>
       </Modal>
     );
