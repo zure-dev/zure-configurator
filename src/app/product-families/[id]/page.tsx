@@ -1,0 +1,844 @@
+'use client';
+
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  Page,
+  Layout,
+  Card,
+  Text,
+  Badge,
+  Button,
+  BlockStack,
+  InlineStack,
+  Spinner,
+  Banner,
+  Modal,
+  FormLayout,
+  TextField,
+  Select,
+  Checkbox,
+  Divider,
+  Box,
+} from '@shopify/polaris';
+import { useParams, useRouter } from 'next/navigation';
+
+// ──────────────────────────────────────────────
+// Types
+// ──────────────────────────────────────────────
+
+interface OptionValue {
+  id: string;
+  name: string;
+  slug: string;
+  sortOrder: number;
+  isDefault: boolean;
+  swatchColor: string | null;
+  swatchImage: string | null;
+  thumbnailUrl: string | null;
+  description: string | null;
+}
+
+interface OptionGroup {
+  id: string;
+  productFamilyId: string;
+  name: string;
+  slug: string;
+  displayType: string;
+  sortOrder: number;
+  isRequired: boolean;
+  helperText: string | null;
+  stepNumber: number | null;
+  values: OptionValue[];
+}
+
+interface ProductFamily {
+  id: string;
+  name: string;
+  handle: string;
+  slug: string;
+  category: string | null;
+  description: string | null;
+  status: string;
+  basePrice: string;
+  shopifyProductId: string | null;
+}
+
+interface GroupFormState {
+  name: string;
+  slug: string;
+  displayType: string;
+  sortOrder: string;
+  isRequired: boolean;
+  helperText: string;
+  stepNumber: string;
+}
+
+interface ValueFormState {
+  name: string;
+  slug: string;
+  sortOrder: string;
+  isDefault: boolean;
+  swatchColor: string;
+  thumbnailUrl: string;
+  description: string;
+}
+
+const BLANK_GROUP: GroupFormState = {
+  name: '',
+  slug: '',
+  displayType: 'TILE',
+  sortOrder: '',
+  isRequired: true,
+  helperText: '',
+  stepNumber: '',
+};
+
+const BLANK_VALUE: ValueFormState = {
+  name: '',
+  slug: '',
+  sortOrder: '',
+  isDefault: false,
+  swatchColor: '',
+  thumbnailUrl: '',
+  description: '',
+};
+
+const DISPLAY_TYPE_OPTIONS = [
+  { label: 'Tile', value: 'TILE' },
+  { label: 'Swatch', value: 'SWATCH' },
+  { label: 'Thumbnail', value: 'THUMBNAIL' },
+  { label: 'Dropdown', value: 'DROPDOWN' },
+  { label: 'Radio', value: 'RADIO' },
+  { label: 'Toggle', value: 'TOGGLE' },
+];
+
+// ──────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────
+
+function toSlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function apiFetch(path: string, options?: RequestInit): Promise<Response> {
+  let shopDomain = '';
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search);
+    shopDomain = params.get('shop') ?? '';
+  }
+  const separator = path.includes('?') ? '&' : '?';
+  const url = shopDomain ? `${path}${separator}shop=${shopDomain}` : path;
+  return fetch(url, { credentials: 'include', ...options });
+}
+
+function displayTypeBadge(dt: string) {
+  const tones: Record<string, 'info' | 'success' | 'attention' | undefined> = {
+    SWATCH: 'success', TILE: 'info', THUMBNAIL: 'attention',
+  };
+  return <Badge tone={tones[dt]}>{dt}</Badge>;
+}
+
+// ──────────────────────────────────────────────
+// Component
+// ──────────────────────────────────────────────
+
+export default function ProductFamilyBuilderPage() {
+  const params = useParams();
+  const router = useRouter();
+  const familyId = params.id as string;
+
+  // ── Family data ──
+  const [family, setFamily] = useState<ProductFamily | null>(null);
+  const [groups, setGroups] = useState<OptionGroup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
+
+  // ── Group modal ──
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [editingGroup, setEditingGroup] = useState<OptionGroup | null>(null);
+  const [groupForm, setGroupForm] = useState<GroupFormState>(BLANK_GROUP);
+  const [groupSaving, setGroupSaving] = useState(false);
+  const [groupError, setGroupError] = useState('');
+  const [groupSlugTouched, setGroupSlugTouched] = useState(false);
+
+  // ── Value modal ──
+  const [valueModalOpen, setValueModalOpen] = useState(false);
+  const [editingValue, setEditingValue] = useState<OptionValue | null>(null);
+  const [valueTargetGroupId, setValueTargetGroupId] = useState('');
+  const [valueForm, setValueForm] = useState<ValueFormState>(BLANK_VALUE);
+  const [valueSaving, setValueSaving] = useState(false);
+  const [valueError, setValueError] = useState('');
+  const [valueSlugTouched, setValueSlugTouched] = useState(false);
+
+  // ── Delete ──
+  const [deleteTarget, setDeleteTarget] = useState<{ type: 'group' | 'value'; id: string; name: string } | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  // ── Preview selections ──
+  const [previewSelections, setPreviewSelections] = useState<Record<string, string>>({});
+
+  // ────────────────────────────────────────────
+  // FETCH
+  // ────────────────────────────────────────────
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const [famRes, grpRes] = await Promise.all([
+        apiFetch(`/api/product-families/${familyId}`),
+        apiFetch(`/api/options?familyId=${familyId}`),
+      ]);
+
+      if (!famRes.ok) {
+        const body = await famRes.json().catch(() => ({}));
+        throw new Error(body.error ?? 'Failed to load product family');
+      }
+      if (!grpRes.ok) {
+        const body = await grpRes.json().catch(() => ({}));
+        throw new Error(body.error ?? 'Failed to load option groups');
+      }
+
+      const famData = await famRes.json();
+      const grpData = await grpRes.json();
+
+      setFamily(famData.family);
+      setGroups(grpData.optionGroups ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load');
+    } finally {
+      setLoading(false);
+    }
+  }, [familyId]);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    if (!successMsg) return;
+    const t = setTimeout(() => setSuccessMsg(''), 3000);
+    return () => clearTimeout(t);
+  }, [successMsg]);
+
+  // ────────────────────────────────────────────
+  // GROUP CRUD
+  // ────────────────────────────────────────────
+
+  const openAddGroup = useCallback(() => {
+    setEditingGroup(null);
+    setGroupForm({ ...BLANK_GROUP, sortOrder: String(groups.length) });
+    setGroupSlugTouched(false);
+    setGroupError('');
+    setGroupModalOpen(true);
+  }, [groups.length]);
+
+  const openEditGroup = useCallback((group: OptionGroup) => {
+    setEditingGroup(group);
+    setGroupForm({
+      name: group.name,
+      slug: group.slug,
+      displayType: group.displayType,
+      sortOrder: String(group.sortOrder),
+      isRequired: group.isRequired,
+      helperText: group.helperText ?? '',
+      stepNumber: group.stepNumber != null ? String(group.stepNumber) : '',
+    });
+    setGroupSlugTouched(true);
+    setGroupError('');
+    setGroupModalOpen(true);
+  }, []);
+
+  const saveGroup = useCallback(async () => {
+    if (!groupForm.name.trim()) { setGroupError('Name is required'); return; }
+    setGroupSaving(true);
+    setGroupError('');
+
+    const slug = (groupForm.slug || toSlug(groupForm.name)).trim();
+    const payload: Record<string, unknown> = {
+      productFamilyId: familyId,
+      name: groupForm.name.trim(),
+      slug,
+      displayType: groupForm.displayType,
+      isRequired: groupForm.isRequired,
+      helperText: groupForm.helperText.trim() || null,
+      stepNumber: groupForm.stepNumber ? parseInt(groupForm.stepNumber, 10) : null,
+    };
+    if (groupForm.sortOrder) payload.sortOrder = parseInt(groupForm.sortOrder, 10);
+
+    try {
+      const isEdit = editingGroup !== null;
+      const url = isEdit ? `/api/options/${editingGroup!.id}` : '/api/options';
+      const res = await apiFetch(url, {
+        method: isEdit ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) { setGroupError(data.error ?? 'Save failed'); return; }
+
+      setGroupModalOpen(false);
+      setSuccessMsg(isEdit ? `"${groupForm.name}" updated` : `"${groupForm.name}" added`);
+      await loadData();
+    } catch (err) {
+      setGroupError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setGroupSaving(false);
+    }
+  }, [groupForm, editingGroup, familyId, loadData]);
+
+  // ────────────────────────────────────────────
+  // VALUE CRUD
+  // ────────────────────────────────────────────
+
+  const openAddValue = useCallback((groupId: string) => {
+    setValueTargetGroupId(groupId);
+    setEditingValue(null);
+    const group = groups.find((g) => g.id === groupId);
+    setValueForm({ ...BLANK_VALUE, sortOrder: String(group?.values.length ?? 0) });
+    setValueSlugTouched(false);
+    setValueError('');
+    setValueModalOpen(true);
+  }, [groups]);
+
+  const openEditValue = useCallback((groupId: string, value: OptionValue) => {
+    setValueTargetGroupId(groupId);
+    setEditingValue(value);
+    setValueForm({
+      name: value.name,
+      slug: value.slug,
+      sortOrder: String(value.sortOrder),
+      isDefault: value.isDefault,
+      swatchColor: value.swatchColor ?? '',
+      thumbnailUrl: value.thumbnailUrl ?? '',
+      description: value.description ?? '',
+    });
+    setValueSlugTouched(true);
+    setValueError('');
+    setValueModalOpen(true);
+  }, []);
+
+  const saveValue = useCallback(async () => {
+    if (!valueForm.name.trim()) { setValueError('Name is required'); return; }
+    setValueSaving(true);
+    setValueError('');
+
+    const slug = (valueForm.slug || toSlug(valueForm.name)).trim();
+    const isEdit = editingValue !== null;
+
+    const payload: Record<string, unknown> = {
+      optionGroupId: valueTargetGroupId,
+      name: valueForm.name.trim(),
+      slug,
+      isDefault: valueForm.isDefault,
+      swatchColor: valueForm.swatchColor.trim() || null,
+      thumbnailUrl: valueForm.thumbnailUrl.trim() || null,
+      description: valueForm.description.trim() || null,
+    };
+    if (valueForm.sortOrder) payload.sortOrder = parseInt(valueForm.sortOrder, 10);
+
+    try {
+      const url = isEdit ? `/api/option-values/${editingValue!.id}` : '/api/option-values';
+      const res = await apiFetch(url, {
+        method: isEdit ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) { setValueError(data.error ?? 'Save failed'); return; }
+
+      setValueModalOpen(false);
+      setSuccessMsg(isEdit ? `"${valueForm.name}" updated` : `"${valueForm.name}" added`);
+      await loadData();
+    } catch (err) {
+      setValueError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setValueSaving(false);
+    }
+  }, [valueForm, editingValue, valueTargetGroupId, loadData]);
+
+  // ────────────────────────────────────────────
+  // DELETE
+  // ────────────────────────────────────────────
+
+  const confirmDelete = useCallback(async () => {
+    if (!deleteTarget) return;
+    setDeleteLoading(true);
+    setDeleteError('');
+    try {
+      const url = deleteTarget.type === 'group'
+        ? `/api/options/${deleteTarget.id}`
+        : `/api/option-values/${deleteTarget.id}`;
+      const res = await apiFetch(url, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setDeleteError(body.error ?? 'Delete failed');
+        return;
+      }
+      setDeleteTarget(null);
+      setSuccessMsg(`"${deleteTarget.name}" deleted`);
+      await loadData();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setDeleteLoading(false);
+    }
+  }, [deleteTarget, loadData]);
+
+  // ────────────────────────────────────────────
+  // RENDER: Loading / Error
+  // ────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <Page title="Loading...">
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '60px 0' }}>
+                <Spinner size="large" />
+              </div>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
+
+  if (error || !family) {
+    return (
+      <Page title="Product Family"
+        backAction={{ content: 'Product Families', onAction: () => router.push('/product-families') }}
+      >
+        <Layout>
+          <Layout.Section>
+            <Banner tone="critical" title="Could not load product family"
+              action={{ content: 'Retry', onAction: loadData }}
+            >
+              <p>{error || 'Product family not found'}</p>
+            </Banner>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
+
+  // ────────────────────────────────────────────
+  // RENDER: Preview panel
+  // ────────────────────────────────────────────
+
+  function renderPreview() {
+    if (groups.length === 0) {
+      return (
+        <Card>
+          <BlockStack gap="200">
+            <Text as="h2" variant="headingSm">Live Preview</Text>
+            <Text as="p" variant="bodySm" tone="subdued">
+              Add option groups to see a preview of the customer-facing configurator.
+            </Text>
+          </BlockStack>
+        </Card>
+      );
+    }
+
+    return (
+      <Card>
+        <BlockStack gap="400">
+          <Text as="h2" variant="headingSm">Live Preview</Text>
+          {groups.map((group) => (
+            <BlockStack key={group.id} gap="200">
+              <InlineStack gap="100" blockAlign="center">
+                <Text as="span" variant="bodyMd" fontWeight="semibold">{group.name}</Text>
+                {group.isRequired && (
+                  <Text as="span" variant="bodySm" tone="critical">*</Text>
+                )}
+              </InlineStack>
+              {group.helperText && (
+                <Text as="span" variant="bodySm" tone="subdued">{group.helperText}</Text>
+              )}
+              <InlineStack gap="200" wrap>
+                {group.values.map((val) => {
+                  const selected = previewSelections[group.slug] === val.slug;
+                  const baseStyle: React.CSSProperties = {
+                    padding: '8px 16px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    border: selected ? '2px solid var(--p-color-border-interactive, #2c6ecb)' : '1px solid var(--p-color-border-subdued, #ddd)',
+                    background: selected ? 'var(--p-color-bg-surface-selected, #f0f5ff)' : 'transparent',
+                    textAlign: 'center' as const,
+                    minWidth: '60px',
+                    transition: 'all 0.15s ease',
+                  };
+
+                  if (group.displayType === 'SWATCH' && val.swatchColor) {
+                    return (
+                      <div
+                        key={val.id}
+                        onClick={() => setPreviewSelections((prev) => ({ ...prev, [group.slug]: val.slug }))}
+                        style={{
+                          ...baseStyle,
+                          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', padding: '6px',
+                        }}
+                      >
+                        <div style={{
+                          width: 32, height: 32, borderRadius: '50%',
+                          background: val.swatchColor,
+                          border: '1px solid #ccc',
+                        }} />
+                        <Text as="span" variant="bodySm">{val.name}</Text>
+                      </div>
+                    );
+                  }
+
+                  if ((group.displayType === 'THUMBNAIL' || group.displayType === 'TILE') && val.thumbnailUrl) {
+                    return (
+                      <div
+                        key={val.id}
+                        onClick={() => setPreviewSelections((prev) => ({ ...prev, [group.slug]: val.slug }))}
+                        style={{ ...baseStyle, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', padding: '6px' }}
+                      >
+                        <img
+                          src={val.thumbnailUrl}
+                          alt={val.name}
+                          style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 4 }}
+                        />
+                        <Text as="span" variant="bodySm">{val.name}</Text>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div
+                      key={val.id}
+                      onClick={() => setPreviewSelections((prev) => ({ ...prev, [group.slug]: val.slug }))}
+                      style={baseStyle}
+                    >
+                      <Text as="span" variant="bodySm">{val.name}</Text>
+                    </div>
+                  );
+                })}
+              </InlineStack>
+            </BlockStack>
+          ))}
+        </BlockStack>
+      </Card>
+    );
+  }
+
+  // ────────────────────────────────────────────
+  // RENDER: Option groups + values (left side)
+  // ────────────────────────────────────────────
+
+  function renderOptionBuilder() {
+    return (
+      <BlockStack gap="400">
+        <InlineStack align="space-between" blockAlign="center">
+          <Text as="h2" variant="headingSm">Option Groups</Text>
+          <Button onClick={openAddGroup}>Add Option Group</Button>
+        </InlineStack>
+
+        {groups.length === 0 && (
+          <Card>
+            <BlockStack gap="200">
+              <Text as="p" variant="bodyMd">No option groups yet.</Text>
+              <Text as="p" variant="bodySm" tone="subdued">
+                Create your first option group (e.g. "Vanity Size", "Cabinet Finish") to start building the configurator.
+              </Text>
+            </BlockStack>
+          </Card>
+        )}
+
+        {groups.map((group) => (
+          <Card key={group.id}>
+            <BlockStack gap="300">
+              {/* Group header */}
+              <InlineStack align="space-between" blockAlign="center">
+                <InlineStack gap="200" blockAlign="center">
+                  <Text as="span" variant="bodyMd" fontWeight="bold">{group.name}</Text>
+                  {displayTypeBadge(group.displayType)}
+                  {group.isRequired && <Badge tone="info">Required</Badge>}
+                  <Text as="span" variant="bodySm" tone="subdued">{group.slug}</Text>
+                </InlineStack>
+                <InlineStack gap="100">
+                  <Button size="slim" variant="plain" onClick={() => openEditGroup(group)}>Edit</Button>
+                  <Button size="slim" variant="plain" tone="critical"
+                    onClick={() => setDeleteTarget({ type: 'group', id: group.id, name: group.name })}
+                  >Delete</Button>
+                </InlineStack>
+              </InlineStack>
+
+              {group.helperText && (
+                <Text as="span" variant="bodySm" tone="subdued">{group.helperText}</Text>
+              )}
+
+              <Divider />
+
+              {/* Values */}
+              <BlockStack gap="200">
+                <InlineStack align="space-between" blockAlign="center">
+                  <Text as="span" variant="bodySm" fontWeight="semibold">
+                    {`Values (${group.values.length})`}
+                  </Text>
+                  <Button size="slim" onClick={() => openAddValue(group.id)}>Add Value</Button>
+                </InlineStack>
+
+                {group.values.length === 0 && (
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    No values yet. Add options like "600mm", "900mm", "Woodland Oak"...
+                  </Text>
+                )}
+
+                {group.values.map((val) => (
+                  <div
+                    key={val.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--p-color-border-subdued, #e1e3e5)',
+                    }}
+                  >
+                    {val.swatchColor && (
+                      <div style={{
+                        width: 20, height: 20, borderRadius: '50%',
+                        background: val.swatchColor, border: '1px solid #ccc', flexShrink: 0,
+                      }} />
+                    )}
+                    {val.thumbnailUrl && !val.swatchColor && (
+                      <img src={val.thumbnailUrl} alt={val.name}
+                        style={{ width: 24, height: 24, objectFit: 'cover', borderRadius: 3, flexShrink: 0 }}
+                      />
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <Text as="span" variant="bodySm" fontWeight="semibold">{val.name}</Text>
+                      <Text as="span" variant="bodySm" tone="subdued">{` (${val.slug})`}</Text>
+                    </div>
+                    {val.isDefault && <Badge tone="success">Default</Badge>}
+                    <Text as="span" variant="bodySm" tone="subdued">{`#${val.sortOrder}`}</Text>
+                    <Button size="slim" variant="plain" onClick={() => openEditValue(group.id, val)}>Edit</Button>
+                    <Button size="slim" variant="plain" tone="critical"
+                      onClick={() => setDeleteTarget({ type: 'value', id: val.id, name: val.name })}
+                    >Delete</Button>
+                  </div>
+                ))}
+              </BlockStack>
+            </BlockStack>
+          </Card>
+        ))}
+      </BlockStack>
+    );
+  }
+
+  // ────────────────────────────────────────────
+  // RENDER: Group modal
+  // ────────────────────────────────────────────
+
+  function renderGroupModal() {
+    const isEdit = editingGroup !== null;
+    return (
+      <Modal
+        open={groupModalOpen}
+        onClose={() => setGroupModalOpen(false)}
+        title={isEdit ? `Edit: ${editingGroup!.name}` : 'Add Option Group'}
+        primaryAction={{
+          content: isEdit ? 'Save' : 'Add',
+          onAction: saveGroup,
+          loading: groupSaving,
+          disabled: !groupForm.name.trim(),
+        }}
+        secondaryActions={[{ content: 'Cancel', onAction: () => setGroupModalOpen(false) }]}
+      >
+        <Modal.Section>
+          {groupError && (
+            <div style={{ marginBottom: 12 }}>
+              <Banner tone="critical" onDismiss={() => setGroupError('')}>{groupError}</Banner>
+            </div>
+          )}
+          <FormLayout>
+            <TextField label="Name" value={groupForm.name} autoComplete="off" requiredIndicator
+              onChange={(v) => {
+                setGroupForm((p) => ({
+                  ...p, name: v,
+                  ...(groupSlugTouched ? {} : { slug: toSlug(v) }),
+                }));
+              }}
+              placeholder="e.g. Vanity Size"
+            />
+            <TextField label="Slug" value={groupForm.slug} autoComplete="off"
+              onChange={(v) => { setGroupSlugTouched(true); setGroupForm((p) => ({ ...p, slug: v })); }}
+              helpText="URL-safe identifier. Auto-generated from name."
+            />
+            <Select label="Display Type" options={DISPLAY_TYPE_OPTIONS}
+              value={groupForm.displayType}
+              onChange={(v) => setGroupForm((p) => ({ ...p, displayType: v }))}
+            />
+            <Checkbox label="Required" checked={groupForm.isRequired}
+              onChange={(v) => setGroupForm((p) => ({ ...p, isRequired: v }))}
+            />
+            <FormLayout.Group>
+              <TextField label="Sort Order" value={groupForm.sortOrder} type="number" autoComplete="off"
+                onChange={(v) => setGroupForm((p) => ({ ...p, sortOrder: v }))}
+              />
+              <TextField label="Step Number" value={groupForm.stepNumber} type="number" autoComplete="off"
+                onChange={(v) => setGroupForm((p) => ({ ...p, stepNumber: v }))}
+                placeholder="Optional"
+              />
+            </FormLayout.Group>
+            <TextField label="Helper Text" value={groupForm.helperText} autoComplete="off"
+              onChange={(v) => setGroupForm((p) => ({ ...p, helperText: v }))}
+              placeholder="Shown below the group name"
+            />
+          </FormLayout>
+        </Modal.Section>
+      </Modal>
+    );
+  }
+
+  // ────────────────────────────────────────────
+  // RENDER: Value modal
+  // ────────────────────────────────────────────
+
+  function renderValueModal() {
+    const isEdit = editingValue !== null;
+    return (
+      <Modal
+        open={valueModalOpen}
+        onClose={() => setValueModalOpen(false)}
+        title={isEdit ? `Edit: ${editingValue!.name}` : 'Add Option Value'}
+        primaryAction={{
+          content: isEdit ? 'Save' : 'Add',
+          onAction: saveValue,
+          loading: valueSaving,
+          disabled: !valueForm.name.trim(),
+        }}
+        secondaryActions={[{ content: 'Cancel', onAction: () => setValueModalOpen(false) }]}
+      >
+        <Modal.Section>
+          {valueError && (
+            <div style={{ marginBottom: 12 }}>
+              <Banner tone="critical" onDismiss={() => setValueError('')}>{valueError}</Banner>
+            </div>
+          )}
+          <FormLayout>
+            <TextField label="Name" value={valueForm.name} autoComplete="off" requiredIndicator
+              onChange={(v) => {
+                setValueForm((p) => ({
+                  ...p, name: v,
+                  ...(valueSlugTouched ? {} : { slug: toSlug(v) }),
+                }));
+              }}
+              placeholder="e.g. 900mm, Woodland Oak"
+            />
+            <TextField label="Slug" value={valueForm.slug} autoComplete="off"
+              onChange={(v) => { setValueSlugTouched(true); setValueForm((p) => ({ ...p, slug: v })); }}
+            />
+            <TextField label="Sort Order" value={valueForm.sortOrder} type="number" autoComplete="off"
+              onChange={(v) => setValueForm((p) => ({ ...p, sortOrder: v }))}
+            />
+            <Checkbox label="Default selection" checked={valueForm.isDefault}
+              onChange={(v) => setValueForm((p) => ({ ...p, isDefault: v }))}
+            />
+            <TextField label="Swatch Color" value={valueForm.swatchColor} autoComplete="off"
+              onChange={(v) => setValueForm((p) => ({ ...p, swatchColor: v }))}
+              placeholder="#8B6914"
+              helpText="Hex color for swatch display type"
+            />
+            <TextField label="Thumbnail URL" value={valueForm.thumbnailUrl} autoComplete="off"
+              onChange={(v) => setValueForm((p) => ({ ...p, thumbnailUrl: v }))}
+              placeholder="https://..."
+            />
+            <TextField label="Description" value={valueForm.description} autoComplete="off" multiline={2}
+              onChange={(v) => setValueForm((p) => ({ ...p, description: v }))}
+              placeholder="Short description for tooltip"
+            />
+          </FormLayout>
+        </Modal.Section>
+      </Modal>
+    );
+  }
+
+  // ────────────────────────────────────────────
+  // RENDER: Delete modal
+  // ────────────────────────────────────────────
+
+  function renderDeleteModal() {
+    if (!deleteTarget) return null;
+    return (
+      <Modal
+        open={true}
+        onClose={() => { setDeleteTarget(null); setDeleteError(''); }}
+        title={`Delete ${deleteTarget.type}`}
+        primaryAction={{
+          content: 'Delete',
+          onAction: confirmDelete,
+          loading: deleteLoading,
+          destructive: true,
+        }}
+        secondaryActions={[{ content: 'Cancel', onAction: () => setDeleteTarget(null) }]}
+      >
+        <Modal.Section>
+          {deleteError && (
+            <div style={{ marginBottom: 12 }}>
+              <Banner tone="critical">{deleteError}</Banner>
+            </div>
+          )}
+          <Text as="p" variant="bodyMd">
+            Are you sure you want to delete <strong>{deleteTarget.name}</strong>?
+            {deleteTarget.type === 'group' && ' This will also delete all values in this group.'}
+          </Text>
+        </Modal.Section>
+      </Modal>
+    );
+  }
+
+  // ────────────────────────────────────────────
+  // RENDER: Main page
+  // ────────────────────────────────────────────
+
+  const shopParam = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('shop') ?? ''
+    : '';
+  const backUrl = shopParam ? `/product-families?shop=${shopParam}` : '/product-families';
+
+  return (
+    <Page
+      title={family.name}
+      subtitle={family.handle}
+      titleMetadata={
+        <InlineStack gap="200">
+          <Badge tone={family.status === 'ACTIVE' ? 'success' : family.status === 'ARCHIVED' ? 'warning' : undefined}>
+            {family.status}
+          </Badge>
+          {family.shopifyProductId && (
+            <Badge>
+              {family.shopifyProductId.replace('gid://shopify/Product/', 'Shopify #')}
+            </Badge>
+          )}
+        </InlineStack>
+      }
+      backAction={{ content: 'Product Families', onAction: () => router.push(backUrl) }}
+    >
+      {successMsg && (
+        <div style={{ marginBottom: 16 }}>
+          <Banner tone="success" onDismiss={() => setSuccessMsg('')}>{successMsg}</Banner>
+        </div>
+      )}
+
+      <Layout>
+        <Layout.Section>
+          {renderOptionBuilder()}
+        </Layout.Section>
+
+        <Layout.Section variant="oneThird">
+          {renderPreview()}
+        </Layout.Section>
+      </Layout>
+
+      {renderGroupModal()}
+      {renderValueModal()}
+      {renderDeleteModal()}
+    </Page>
+  );
+}

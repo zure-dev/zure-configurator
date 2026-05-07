@@ -247,6 +247,20 @@ export default function ProductFamiliesPage() {
   }, [successMsg]);
 
   // ────────────────────────────────────────────
+  // NAVIGATION
+  // ────────────────────────────────────────────
+
+  const navigateToBuilder = useCallback((familyId: string) => {
+    const shopParam = typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('shop') ?? ''
+      : '';
+    const url = shopParam
+      ? `/product-families/${familyId}?shop=${shopParam}`
+      : `/product-families/${familyId}`;
+    router.push(url);
+  }, [router]);
+
+  // ────────────────────────────────────────────
   // SHOPIFY PRODUCT PICKER
   // ────────────────────────────────────────────
 
@@ -328,15 +342,9 @@ export default function ProductFamiliesPage() {
         setSuccessMsg(`"${product.title}" linked successfully`);
         await loadFamilies();
 
-        // Navigate to the new product family detail page
+        // Navigate to the builder page
         if (familyId) {
-          const shopParam = typeof window !== 'undefined'
-            ? new URLSearchParams(window.location.search).get('shop') ?? ''
-            : '';
-          const detailUrl = shopParam
-            ? `/product-families/${familyId}?shop=${shopParam}`
-            : `/product-families/${familyId}`;
-          router.push(detailUrl);
+          navigateToBuilder(familyId);
         }
       } catch (err) {
         setLinkError(err instanceof Error ? err.message : 'Network error');
@@ -344,7 +352,7 @@ export default function ProductFamiliesPage() {
         setLinking(false);
       }
     },
-    [loadFamilies, router]
+    [loadFamilies, navigateToBuilder]
   );
 
   // ────────────────────────────────────────────
@@ -637,8 +645,11 @@ export default function ProductFamiliesPage() {
 
         <IndexTable.Cell>
           <InlineStack gap="200" blockAlign="center">
+            <Button size="slim" onClick={() => navigateToBuilder(family.id)}>
+              Open
+            </Button>
             <Button size="slim" variant="plain" onClick={() => openEditModal(family)}>
-              Edit
+              Settings
             </Button>
             <Button size="slim" variant="plain" tone="critical" onClick={() => openDeleteConfirm(family)}>
               Delete
