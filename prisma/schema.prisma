@@ -157,6 +157,17 @@ model OptionValue {
   description   String?     // Short description for tooltip
   metadata      Json?       // arbitrary KV for future use
 
+  // ── Linked Shopify Product/Variant (Phase 1) ──
+  // Optional: link this option value to a real Shopify product/variant
+  // so inventory can update when this option is selected in a bundle.
+  shopifyProductId    String?                // e.g. "gid://shopify/Product/123"
+  shopifyVariantId    String?                // e.g. "gid://shopify/ProductVariant/456"
+  shopifyProductTitle String?                // cached product title for admin display
+  shopifyVariantTitle String?                // cached variant title (e.g. "Large / Oak")
+  shopifySku          String?                // cached SKU for admin display
+  shopifyImageUrl     String?                // cached product/variant image URL
+  shopifyPrice        Decimal? @db.Decimal(10, 2) // cached standalone Shopify price
+
   @@unique([optionGroupId, slug])
   @@index([optionGroupId, sortOrder])
   @@map("option_values")

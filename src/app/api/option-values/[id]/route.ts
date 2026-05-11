@@ -30,7 +30,6 @@ export async function GET(
 }
 
 // PUT /api/option-values/[id]
-// Body: { name?, slug?, sortOrder?, isDefault?, swatchColor?, swatchImage?, thumbnailUrl?, description?, metadata? }
 export async function PUT(
   request: NextRequest,
   { params }: { params: { id: string } }
@@ -51,6 +50,13 @@ export async function PUT(
       thumbnailUrl: body.thumbnailUrl,
       description: body.description,
       metadata: body.metadata,
+      shopifyProductId: body.shopifyProductId,
+      shopifyVariantId: body.shopifyVariantId,
+      shopifyProductTitle: body.shopifyProductTitle,
+      shopifyVariantTitle: body.shopifyVariantTitle,
+      shopifySku: body.shopifySku,
+      shopifyImageUrl: body.shopifyImageUrl,
+      shopifyPrice: body.shopifyPrice,
     });
 
     return tenantResponse({ optionValue: value });

@@ -4,12 +4,6 @@ import { db } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
-// ──────────────────────────────────────────────
-// GET /api/shopify/products?query=vanity
-// Searches the connected Shopify store for products.
-// Returns title, handle, status, featuredImage, id, first variant price.
-// ──────────────────────────────────────────────
-
 const PRODUCTS_QUERY = `
   query SearchProducts($query: String!, $first: Int!) {
     products(first: $first, query: $query) {
@@ -37,12 +31,49 @@ const PRODUCTS_QUERY = `
   }
 `;
 
+const PRODUCTS_WITH_VARIANTS_QUERY = `
+  query SearchProductsWithVariants($query: String!, $first: Int!) {
+    products(first: $first, query: $query) {
+      edges {
+        node {
+          id
+          title
+          handle
+          status
+          featuredImage {
+            url
+            altText
+          }
+          variants(first: 100) {
+            edges {
+              node {
+                id
+                title
+                price
+                sku
+                image {
+                  url
+                  altText
+                }
+                inventoryQuantity
+                selectedOptions {
+                  name
+                  value
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
 export async function GET(request: NextRequest) {
   try {
     const tenant = await getTenantFromSession(request);
     if (!tenant) return tenantError('Unauthorized', 401);
 
-    // Look up the store's access token
     const store = await db.store.findUnique({
       where: { id: tenant.storeId },
       select: { shopifyDomain: true, shopifyAccessToken: true },
@@ -53,12 +84,14 @@ export async function GET(request: NextRequest) {
     }
 
     const searchQuery = request.nextUrl.searchParams.get('query') ?? '';
+    const includeVariants = request.nextUrl.searchParams.get('includeVariants') === 'true';
     const limit = Math.min(
       parseInt(request.nextUrl.searchParams.get('limit') ?? '20', 10),
       50
     );
 
-    // Call Shopify Admin GraphQL API
+    const graphqlQuery = includeVariants ? PRODUCTS_WITH_VARIANTS_QUERY : PRODUCTS_QUERY;
+
     const shopifyRes = await fetch(
       `https://${store.shopifyDomain}/admin/api/2024-01/graphql.json`,
       {
@@ -68,7 +101,7 @@ export async function GET(request: NextRequest) {
           'X-Shopify-Access-Token': store.shopifyAccessToken,
         },
         body: JSON.stringify({
-          query: PRODUCTS_QUERY,
+          query: graphqlQuery,
           variables: {
             query: searchQuery || '*',
             first: limit,
@@ -92,9 +125,39 @@ export async function GET(request: NextRequest) {
 
     const edges = shopifyData.data?.products?.edges ?? [];
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const products = edges.map((edge: any) => {
       const node = edge.node;
-      const firstVariant = node.variants?.edges?.[0]?.node;
+      const variantEdges = node.variants?.edges ?? [];
+
+      if (includeVariants) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const variants = variantEdges.map((ve: any) => {
+          const v = ve.node;
+          return {
+            id: v.id,
+            title: v.title,
+            price: v.price,
+            sku: v.sku ?? null,
+            imageUrl: v.image?.url ?? null,
+            imageAlt: v.image?.altText ?? null,
+            inventoryQuantity: v.inventoryQuantity ?? null,
+            selectedOptions: v.selectedOptions ?? [],
+          };
+        });
+
+        return {
+          id: node.id,
+          title: node.title,
+          handle: node.handle,
+          status: node.status,
+          featuredImageUrl: node.featuredImage?.url ?? null,
+          featuredImageAlt: node.featuredImage?.altText ?? null,
+          variants,
+        };
+      }
+
+      const firstVariant = variantEdges[0]?.node;
       return {
         id: node.id,
         title: node.title,

@@ -1,30 +1,23 @@
 import { NextRequest } from 'next/server';
 import { getTenantFromSession, tenantResponse, tenantError } from '@/lib/tenant';
 import {
-  listOptionValuesByGroupSlug,
-  createOptionValueByGroupSlug,
+  listOptionValues,
+  createOptionValue,
   OptionValueError,
 } from '@/services/option-value.service';
 
-// GET /api/option-values?familyId=xxx&groupSlug=stone-type
+export const dynamic = 'force-dynamic';
+
+// GET /api/option-values?optionGroupId=xxx
 export async function GET(request: NextRequest) {
   try {
     const tenant = await getTenantFromSession(request);
-    if (!tenant?.storeId) return tenantError('Unauthorized', 401);
+    if (!tenant) return tenantError('Unauthorized', 401);
 
-    const familyId = request.nextUrl.searchParams.get('familyId');
-    const groupSlug = request.nextUrl.searchParams.get('groupSlug');
+    const optionGroupId = request.nextUrl.searchParams.get('optionGroupId');
+    if (!optionGroupId) return tenantError('optionGroupId is required', 400);
 
-    if (!familyId || !groupSlug) {
-      return tenantError('familyId and groupSlug are required', 400);
-    }
-
-    const values = await listOptionValuesByGroupSlug(
-      tenant.storeId,
-      familyId,
-      groupSlug
-    );
-
+    const values = await listOptionValues(tenant.storeId, optionGroupId);
     return tenantResponse({ optionValues: values });
   } catch (error) {
     if (error instanceof OptionValueError) {
@@ -36,21 +29,19 @@ export async function GET(request: NextRequest) {
 }
 
 // POST /api/option-values
-// Body: { familyId, groupSlug, name, slug?, sortOrder?, isDefault?, swatchColor?, swatchImage?, thumbnailUrl?, description?, metadata? }
 export async function POST(request: NextRequest) {
   try {
     const tenant = await getTenantFromSession(request);
-    if (!tenant?.storeId) return tenantError('Unauthorized', 401);
+    if (!tenant) return tenantError('Unauthorized', 401);
 
     const body = await request.json();
 
-    if (!body.familyId || !body.groupSlug || !body.name) {
-      return tenantError('familyId, groupSlug and name are required', 400);
+    if (!body.optionGroupId || !body.name) {
+      return tenantError('optionGroupId and name are required', 400);
     }
 
-    const value = await createOptionValueByGroupSlug(tenant.storeId, {
-      familyId: body.familyId,
-      groupSlug: body.groupSlug,
+    const value = await createOptionValue(tenant.storeId, {
+      optionGroupId: body.optionGroupId,
       name: body.name,
       slug: body.slug,
       sortOrder: body.sortOrder,
@@ -60,6 +51,13 @@ export async function POST(request: NextRequest) {
       thumbnailUrl: body.thumbnailUrl,
       description: body.description,
       metadata: body.metadata,
+      shopifyProductId: body.shopifyProductId,
+      shopifyVariantId: body.shopifyVariantId,
+      shopifyProductTitle: body.shopifyProductTitle,
+      shopifyVariantTitle: body.shopifyVariantTitle,
+      shopifySku: body.shopifySku,
+      shopifyImageUrl: body.shopifyImageUrl,
+      shopifyPrice: body.shopifyPrice,
     });
 
     return tenantResponse({ optionValue: value }, 201);

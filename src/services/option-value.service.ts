@@ -17,6 +17,13 @@ export interface CreateOptionValueInput {
   thumbnailUrl?: string | null;
   description?: string | null;
   metadata?: Record<string, unknown> | null;
+  shopifyProductId?: string | null;
+  shopifyVariantId?: string | null;
+  shopifyProductTitle?: string | null;
+  shopifyVariantTitle?: string | null;
+  shopifySku?: string | null;
+  shopifyImageUrl?: string | null;
+  shopifyPrice?: number | null;
 }
 
 export interface UpdateOptionValueInput {
@@ -29,6 +36,13 @@ export interface UpdateOptionValueInput {
   thumbnailUrl?: string | null;
   description?: string | null;
   metadata?: Record<string, unknown> | null;
+  shopifyProductId?: string | null;
+  shopifyVariantId?: string | null;
+  shopifyProductTitle?: string | null;
+  shopifyVariantTitle?: string | null;
+  shopifySku?: string | null;
+  shopifyImageUrl?: string | null;
+  shopifyPrice?: number | null;
 }
 
 export interface CreateOptionValueBySlugInput {
@@ -43,6 +57,13 @@ export interface CreateOptionValueBySlugInput {
   thumbnailUrl?: string | null;
   description?: string | null;
   metadata?: Record<string, unknown> | null;
+  shopifyProductId?: string | null;
+  shopifyVariantId?: string | null;
+  shopifyProductTitle?: string | null;
+  shopifyVariantTitle?: string | null;
+  shopifySku?: string | null;
+  shopifyImageUrl?: string | null;
+  shopifyPrice?: number | null;
 }
 
 // ──────────────────────────────────────────────
@@ -56,30 +77,14 @@ export function toSlug(name: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-/**
- * Verify that an option group exists by ID, then verify that it belongs to the store.
- */
 async function verifyGroupOwnership(storeId: string, optionGroupId: string) {
   const group = await db.optionGroup.findUnique({
     where: { id: optionGroupId },
     include: {
       productFamily: {
-        select: {
-          id: true,
-          name: true,
-          storeId: true,
-        },
+        select: { id: true, name: true, storeId: true },
       },
     },
-  });
-
-  console.log('[verifyGroupOwnership]', {
-    requestedStoreId: storeId,
-    requestedOptionGroupId: optionGroupId,
-    foundGroupId: group?.id ?? null,
-    foundProductFamilyId: group?.productFamily?.id ?? null,
-    foundProductFamilyStoreId: group?.productFamily?.storeId ?? null,
-    foundProductFamilyName: group?.productFamily?.name ?? null,
   });
 
   if (!group) {
@@ -96,9 +101,6 @@ async function verifyGroupOwnership(storeId: string, optionGroupId: string) {
   return group;
 }
 
-/**
- * Verify that an option value exists by ID, then verify that it belongs to the store.
- */
 async function verifyValueOwnership(storeId: string, valueId: string) {
   const value = await db.optionValue.findUnique({
     where: { id: valueId },
@@ -106,11 +108,7 @@ async function verifyValueOwnership(storeId: string, valueId: string) {
       optionGroup: {
         include: {
           productFamily: {
-            select: {
-              id: true,
-              name: true,
-              storeId: true,
-            },
+            select: { id: true, name: true, storeId: true },
           },
         },
       },
@@ -131,10 +129,6 @@ async function verifyValueOwnership(storeId: string, valueId: string) {
   return value;
 }
 
-/**
- * Find a group by familyId + groupSlug for the current store.
- * This is a safer dev path when direct groupId lookups are unreliable.
- */
 async function findGroupByFamilyAndSlug(
   storeId: string,
   familyId: string,
@@ -144,29 +138,13 @@ async function findGroupByFamilyAndSlug(
     where: {
       productFamilyId: familyId,
       slug: groupSlug,
-      productFamily: {
-        storeId,
-      },
+      productFamily: { storeId },
     },
     include: {
       productFamily: {
-        select: {
-          id: true,
-          name: true,
-          storeId: true,
-        },
+        select: { id: true, name: true, storeId: true },
       },
     },
-  });
-
-  console.log('[findGroupByFamilyAndSlug]', {
-    requestedStoreId: storeId,
-    requestedFamilyId: familyId,
-    requestedGroupSlug: groupSlug,
-    foundGroupId: group?.id ?? null,
-    foundProductFamilyId: group?.productFamily?.id ?? null,
-    foundProductFamilyStoreId: group?.productFamily?.storeId ?? null,
-    foundProductFamilyName: group?.productFamily?.name ?? null,
   });
 
   if (!group) {
@@ -174,6 +152,26 @@ async function findGroupByFamilyAndSlug(
   }
 
   return group;
+}
+
+function buildShopifyLinkData(input: {
+  shopifyProductId?: string | null;
+  shopifyVariantId?: string | null;
+  shopifyProductTitle?: string | null;
+  shopifyVariantTitle?: string | null;
+  shopifySku?: string | null;
+  shopifyImageUrl?: string | null;
+  shopifyPrice?: number | null;
+}): Record<string, unknown> {
+  const data: Record<string, unknown> = {};
+  if (input.shopifyProductId !== undefined) data.shopifyProductId = input.shopifyProductId;
+  if (input.shopifyVariantId !== undefined) data.shopifyVariantId = input.shopifyVariantId;
+  if (input.shopifyProductTitle !== undefined) data.shopifyProductTitle = input.shopifyProductTitle;
+  if (input.shopifyVariantTitle !== undefined) data.shopifyVariantTitle = input.shopifyVariantTitle;
+  if (input.shopifySku !== undefined) data.shopifySku = input.shopifySku;
+  if (input.shopifyImageUrl !== undefined) data.shopifyImageUrl = input.shopifyImageUrl;
+  if (input.shopifyPrice !== undefined) data.shopifyPrice = input.shopifyPrice;
+  return data;
 }
 
 // ──────────────────────────────────────────────
@@ -198,24 +196,15 @@ export async function getOptionValue(storeId: string, valueId: string) {
           id: true,
           name: true,
           productFamily: {
-            select: {
-              id: true,
-              name: true,
-              storeId: true,
-            },
+            select: { id: true, name: true, storeId: true },
           },
         },
       },
     },
   });
 
-  if (!value) {
-    return null;
-  }
-
-  if (value.optionGroup.productFamily.storeId !== storeId) {
-    return null;
-  }
+  if (!value) return null;
+  if (value.optionGroup.productFamily.storeId !== storeId) return null;
 
   return value;
 }
@@ -229,10 +218,7 @@ export async function createOptionValue(
   const slug = (input.slug && input.slug.trim()) || toSlug(input.name);
 
   const existing = await db.optionValue.findFirst({
-    where: {
-      optionGroupId: input.optionGroupId,
-      slug,
-    },
+    where: { optionGroupId: input.optionGroupId, slug },
     select: { id: true },
   });
 
@@ -253,7 +239,7 @@ export async function createOptionValue(
     sortOrder = (maxValue?.sortOrder ?? -1) + 1;
   }
 
-  const value = await db.$transaction(async (tx) => {
+  const value = await db.$transaction(async (tx: Prisma.TransactionClient) => {
     if (input.isDefault === true) {
       await tx.optionValue.updateMany({
         where: { optionGroupId: input.optionGroupId },
@@ -275,14 +261,16 @@ export async function createOptionValue(
         metadata: input.metadata != null
           ? (input.metadata as Prisma.InputJsonValue)
           : Prisma.JsonNull,
+        shopifyProductId: input.shopifyProductId ?? null,
+        shopifyVariantId: input.shopifyVariantId ?? null,
+        shopifyProductTitle: input.shopifyProductTitle ?? null,
+        shopifyVariantTitle: input.shopifyVariantTitle ?? null,
+        shopifySku: input.shopifySku ?? null,
+        shopifyImageUrl: input.shopifyImageUrl ?? null,
+        shopifyPrice: input.shopifyPrice ?? null,
       },
       include: {
-        optionGroup: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
+        optionGroup: { select: { id: true, name: true } },
       },
     });
   });
@@ -334,7 +322,7 @@ export async function updateOptionValue(
     }
   }
 
-  const updated = await db.$transaction(async (tx) => {
+  const updated = await db.$transaction(async (tx: Prisma.TransactionClient) => {
     if (input.isDefault === true) {
       await tx.optionValue.updateMany({
         where: {
@@ -361,16 +349,14 @@ export async function updateOptionValue(
         : Prisma.JsonNull;
     }
 
+    const shopifyData = buildShopifyLinkData(input);
+    Object.assign(updateData, shopifyData);
+
     return tx.optionValue.update({
       where: { id: valueId },
       data: updateData,
       include: {
-        optionGroup: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
+        optionGroup: { select: { id: true, name: true } },
       },
     });
   });
@@ -390,9 +376,7 @@ export async function updateOptionValue(
 export async function deleteOptionValue(storeId: string, valueId: string) {
   const existing = await verifyValueOwnership(storeId, valueId);
 
-  await db.optionValue.delete({
-    where: { id: valueId },
-  });
+  await db.optionValue.delete({ where: { id: valueId } });
 
   await createAuditLog({
     storeId,
@@ -435,10 +419,7 @@ export async function createOptionValueByGroupSlug(
   const slug = (input.slug && input.slug.trim()) || toSlug(input.name);
 
   const existing = await db.optionValue.findFirst({
-    where: {
-      optionGroupId: group.id,
-      slug,
-    },
+    where: { optionGroupId: group.id, slug },
     select: { id: true },
   });
 
@@ -459,7 +440,7 @@ export async function createOptionValueByGroupSlug(
     sortOrder = (maxValue?.sortOrder ?? -1) + 1;
   }
 
-  const value = await db.$transaction(async (tx) => {
+  const value = await db.$transaction(async (tx: Prisma.TransactionClient) => {
     if (input.isDefault === true) {
       await tx.optionValue.updateMany({
         where: { optionGroupId: group.id },
@@ -481,14 +462,16 @@ export async function createOptionValueByGroupSlug(
         metadata: input.metadata != null
           ? (input.metadata as Prisma.InputJsonValue)
           : Prisma.JsonNull,
+        shopifyProductId: input.shopifyProductId ?? null,
+        shopifyVariantId: input.shopifyVariantId ?? null,
+        shopifyProductTitle: input.shopifyProductTitle ?? null,
+        shopifyVariantTitle: input.shopifyVariantTitle ?? null,
+        shopifySku: input.shopifySku ?? null,
+        shopifyImageUrl: input.shopifyImageUrl ?? null,
+        shopifyPrice: input.shopifyPrice ?? null,
       },
       include: {
-        optionGroup: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
+        optionGroup: { select: { id: true, name: true } },
       },
     });
   });

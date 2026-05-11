@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Page,
   Layout,
@@ -36,6 +36,35 @@ interface OptionValue {
   swatchImage: string | null;
   thumbnailUrl: string | null;
   description: string | null;
+  // Linked Shopify product/variant
+  shopifyProductId: string | null;
+  shopifyVariantId: string | null;
+  shopifyProductTitle: string | null;
+  shopifyVariantTitle: string | null;
+  shopifySku: string | null;
+  shopifyImageUrl: string | null;
+  shopifyPrice: string | null;
+}
+
+interface ShopifyVariant {
+  id: string;
+  title: string;
+  price: string;
+  sku: string | null;
+  imageUrl: string | null;
+  imageAlt: string | null;
+  inventoryQuantity: number | null;
+  selectedOptions: { name: string; value: string }[];
+}
+
+interface ShopifyProductWithVariants {
+  id: string;
+  title: string;
+  handle: string;
+  status: string;
+  featuredImageUrl: string | null;
+  featuredImageAlt: string | null;
+  variants: ShopifyVariant[];
 }
 
 interface OptionGroup {
@@ -81,6 +110,14 @@ interface ValueFormState {
   swatchColor: string;
   thumbnailUrl: string;
   description: string;
+  // Linked Shopify product/variant
+  shopifyProductId: string;
+  shopifyVariantId: string;
+  shopifyProductTitle: string;
+  shopifyVariantTitle: string;
+  shopifySku: string;
+  shopifyImageUrl: string;
+  shopifyPrice: string;
 }
 
 const BLANK_GROUP: GroupFormState = {
@@ -101,6 +138,13 @@ const BLANK_VALUE: ValueFormState = {
   swatchColor: '',
   thumbnailUrl: '',
   description: '',
+  shopifyProductId: '',
+  shopifyVariantId: '',
+  shopifyProductTitle: '',
+  shopifyVariantTitle: '',
+  shopifySku: '',
+  shopifyImageUrl: '',
+  shopifyPrice: '',
 };
 
 const DISPLAY_TYPE_OPTIONS = [
@@ -188,6 +232,14 @@ export default function ProductFamilyBuilderPage() {
 
   // ── Color picker state ──
   const [showColorPicker, setShowColorPicker] = useState(false);
+
+  // ── Shopify product picker (for linking values to products/variants) ──
+  const [shopifyPickerOpen, setShopifyPickerOpen] = useState(false);
+  const [shopifySearchQuery, setShopifySearchQuery] = useState('');
+  const [shopifySearchResults, setShopifySearchResults] = useState<ShopifyProductWithVariants[]>([]);
+  const [shopifySearchLoading, setShopifySearchLoading] = useState(false);
+  const [shopifySearchError, setShopifySearchError] = useState('');
+  const shopifySearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Delete ──
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'group' | 'value'; id: string; name: string } | null>(null);
@@ -285,6 +337,82 @@ export default function ProductFamilyBuilderPage() {
   }, []);
 
   // ────────────────────────────────────────────
+  // SHOPIFY PRODUCT/VARIANT PICKER
+  // ────────────────────────────────────────────
+
+  const searchShopifyForValue = useCallback(async (query: string) => {
+    setShopifySearchLoading(true);
+    setShopifySearchError('');
+    try {
+      const res = await apiFetch(
+        `/api/shopify/products?query=${encodeURIComponent(query)}&includeVariants=true&limit=10`
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? 'Search failed');
+      }
+      const data = await res.json();
+      setShopifySearchResults(data.products ?? []);
+    } catch (err) {
+      setShopifySearchError(err instanceof Error ? err.message : 'Search failed');
+    } finally {
+      setShopifySearchLoading(false);
+    }
+  }, []);
+
+  const openShopifyPicker = useCallback(() => {
+    setShopifyPickerOpen(true);
+    setShopifySearchQuery('');
+    setShopifySearchResults([]);
+    setShopifySearchError('');
+    searchShopifyForValue('');
+  }, [searchShopifyForValue]);
+
+  const handleShopifySearchChange = useCallback(
+    (value: string) => {
+      setShopifySearchQuery(value);
+      if (shopifySearchTimer.current) clearTimeout(shopifySearchTimer.current);
+      shopifySearchTimer.current = setTimeout(() => {
+        searchShopifyForValue(value);
+      }, 400);
+    },
+    [searchShopifyForValue]
+  );
+
+  const selectShopifyVariant = useCallback(
+    (product: ShopifyProductWithVariants, variant: ShopifyVariant) => {
+      setValueForm((prev) => ({
+        ...prev,
+        shopifyProductId: product.id,
+        shopifyVariantId: variant.id,
+        shopifyProductTitle: product.title,
+        shopifyVariantTitle: variant.title,
+        shopifySku: variant.sku ?? '',
+        shopifyImageUrl: variant.imageUrl ?? product.featuredImageUrl ?? '',
+        shopifyPrice: variant.price,
+        // Auto-fill name/thumbnail if empty
+        ...(prev.name ? {} : { name: variant.title === 'Default Title' ? product.title : `${product.title} — ${variant.title}` }),
+        ...(prev.thumbnailUrl ? {} : { thumbnailUrl: variant.imageUrl ?? product.featuredImageUrl ?? '' }),
+      }));
+      setShopifyPickerOpen(false);
+    },
+    []
+  );
+
+  const unlinkShopifyProduct = useCallback(() => {
+    setValueForm((prev) => ({
+      ...prev,
+      shopifyProductId: '',
+      shopifyVariantId: '',
+      shopifyProductTitle: '',
+      shopifyVariantTitle: '',
+      shopifySku: '',
+      shopifyImageUrl: '',
+      shopifyPrice: '',
+    }));
+  }, []);
+
+  // ────────────────────────────────────────────
   // GROUP CRUD
   // ────────────────────────────────────────────
 
@@ -379,6 +507,13 @@ export default function ProductFamilyBuilderPage() {
       swatchColor: value.swatchColor ?? '',
       thumbnailUrl: value.thumbnailUrl ?? '',
       description: value.description ?? '',
+      shopifyProductId: value.shopifyProductId ?? '',
+      shopifyVariantId: value.shopifyVariantId ?? '',
+      shopifyProductTitle: value.shopifyProductTitle ?? '',
+      shopifyVariantTitle: value.shopifyVariantTitle ?? '',
+      shopifySku: value.shopifySku ?? '',
+      shopifyImageUrl: value.shopifyImageUrl ?? '',
+      shopifyPrice: value.shopifyPrice ?? '',
     });
     setValueSlugTouched(true);
     setValueError('');
@@ -403,6 +538,14 @@ export default function ProductFamilyBuilderPage() {
       swatchColor: valueForm.swatchColor.trim() || null,
       thumbnailUrl: valueForm.thumbnailUrl.trim() || null,
       description: valueForm.description.trim() || null,
+      // Shopify link fields
+      shopifyProductId: valueForm.shopifyProductId.trim() || null,
+      shopifyVariantId: valueForm.shopifyVariantId.trim() || null,
+      shopifyProductTitle: valueForm.shopifyProductTitle.trim() || null,
+      shopifyVariantTitle: valueForm.shopifyVariantTitle.trim() || null,
+      shopifySku: valueForm.shopifySku.trim() || null,
+      shopifyImageUrl: valueForm.shopifyImageUrl.trim() || null,
+      shopifyPrice: valueForm.shopifyPrice ? parseFloat(valueForm.shopifyPrice) : null,
     };
     if (valueForm.sortOrder) payload.sortOrder = parseInt(valueForm.sortOrder, 10);
 
@@ -676,6 +819,7 @@ export default function ProductFamilyBuilderPage() {
                       <Text as="span" variant="bodySm" tone="subdued">{` (${val.slug})`}</Text>
                     </div>
                     {val.isDefault && <Badge tone="success">Default</Badge>}
+                    {val.shopifyProductId && <Badge>Linked</Badge>}
                     <Text as="span" variant="bodySm" tone="subdued">{`#${val.sortOrder}`}</Text>
                     <Button size="slim" variant="plain" onClick={() => openEditValue(group.id, val)}>Edit</Button>
                     <Button size="slim" variant="plain" tone="critical"
@@ -809,6 +953,61 @@ export default function ProductFamilyBuilderPage() {
               </div>
             </FormLayout.Group>
           </FormLayout>
+        </Modal.Section>
+
+        {/* ── Linked Shopify Product/Variant ── */}
+        <Modal.Section>
+          <BlockStack gap="300">
+            <Text as="span" variant="bodyMd" fontWeight="semibold">Linked Shopify Product</Text>
+
+            {valueForm.shopifyProductId ? (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '12px',
+                padding: '12px', borderRadius: '8px',
+                border: '1px solid var(--p-color-border-subdued, #ddd)',
+                background: 'var(--p-color-bg-surface-secondary, #f6f6f7)',
+              }}>
+                {valueForm.shopifyImageUrl && (
+                  <img src={valueForm.shopifyImageUrl} alt={valueForm.shopifyProductTitle}
+                    style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }}
+                  />
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <Text as="span" variant="bodySm" fontWeight="semibold">
+                    {valueForm.shopifyProductTitle}
+                  </Text>
+                  {valueForm.shopifyVariantTitle && valueForm.shopifyVariantTitle !== 'Default Title' && (
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      {valueForm.shopifyVariantTitle}
+                    </Text>
+                  )}
+                  <InlineStack gap="200">
+                    {valueForm.shopifySku && (
+                      <Text as="span" variant="bodySm" tone="subdued">
+                        {`SKU: ${valueForm.shopifySku}`}
+                      </Text>
+                    )}
+                    {valueForm.shopifyPrice && (
+                      <Text as="span" variant="bodySm" tone="subdued">
+                        {`$${parseFloat(valueForm.shopifyPrice).toFixed(2)}`}
+                      </Text>
+                    )}
+                  </InlineStack>
+                </div>
+                <Button size="slim" variant="plain" tone="critical" onClick={unlinkShopifyProduct}>
+                  Unlink
+                </Button>
+              </div>
+            ) : (
+              <Button onClick={openShopifyPicker} variant="secondary">
+                Link Shopify Product / Variant
+              </Button>
+            )}
+
+            <Text as="span" variant="bodySm" tone="subdued">
+              Optional. Link to a Shopify product so inventory updates when this option is selected.
+            </Text>
+          </BlockStack>
         </Modal.Section>
 
         {/* ── Image Upload Section ── */}
@@ -977,6 +1176,110 @@ export default function ProductFamilyBuilderPage() {
   }
 
   // ────────────────────────────────────────────
+  // RENDER: Shopify product/variant picker modal
+  // ────────────────────────────────────────────
+
+  function renderShopifyPickerModal() {
+    return (
+      <Modal
+        open={shopifyPickerOpen}
+        onClose={() => setShopifyPickerOpen(false)}
+        title="Link Shopify Product / Variant"
+      >
+        <Modal.Section>
+          <BlockStack gap="300">
+            <TextField
+              label="Search products"
+              value={shopifySearchQuery}
+              onChange={handleShopifySearchChange}
+              placeholder="Search by name or SKU..."
+              autoComplete="off"
+              clearButton
+              onClearButtonClick={() => handleShopifySearchChange('')}
+            />
+
+            {shopifySearchLoading && (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '16px 0' }}>
+                <Spinner size="small" />
+              </div>
+            )}
+
+            {shopifySearchError && (
+              <Banner tone="critical">{shopifySearchError}</Banner>
+            )}
+
+            {!shopifySearchLoading && shopifySearchResults.length === 0 && !shopifySearchError && (
+              <Text as="p" variant="bodySm" tone="subdued">
+                No products found.
+              </Text>
+            )}
+
+            {!shopifySearchLoading && shopifySearchResults.map((product) => (
+              <div key={product.id} style={{
+                border: '1px solid var(--p-color-border-subdued, #ddd)',
+                borderRadius: '8px', overflow: 'hidden',
+              }}>
+                {/* Product header */}
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: '10px',
+                  padding: '10px 12px',
+                  background: 'var(--p-color-bg-surface-secondary, #f6f6f7)',
+                }}>
+                  {product.featuredImageUrl && (
+                    <img src={product.featuredImageUrl} alt={product.title}
+                      style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
+                    />
+                  )}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Text as="span" variant="bodySm" fontWeight="semibold">{product.title}</Text>
+                  </div>
+                  <Badge tone={product.status === 'ACTIVE' ? 'success' : undefined}>
+                    {product.status}
+                  </Badge>
+                </div>
+
+                {/* Variant list */}
+                {product.variants.map((variant) => (
+                  <div
+                    key={variant.id}
+                    onClick={() => selectShopifyVariant(product, variant)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '10px',
+                      padding: '8px 12px 8px 24px',
+                      cursor: 'pointer',
+                      borderTop: '1px solid var(--p-color-border-subdued, #eee)',
+                      transition: 'background 0.1s ease',
+                    }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--p-color-bg-surface-hover, #f1f2f3)'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                  >
+                    {variant.imageUrl && (
+                      <img src={variant.imageUrl} alt={variant.title}
+                        style={{ width: 28, height: 28, objectFit: 'cover', borderRadius: 3, flexShrink: 0 }}
+                      />
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <Text as="span" variant="bodySm">
+                        {variant.title === 'Default Title' ? 'Default' : variant.title}
+                      </Text>
+                      {variant.sku && (
+                        <Text as="span" variant="bodySm" tone="subdued">{` · SKU: ${variant.sku}`}</Text>
+                      )}
+                    </div>
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      {`$${parseFloat(variant.price).toFixed(2)}`}
+                    </Text>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+    );
+  }
+
+  // ────────────────────────────────────────────
   // RENDER: Delete modal
   // ────────────────────────────────────────────
 
@@ -1055,6 +1358,7 @@ export default function ProductFamilyBuilderPage() {
 
       {renderGroupModal()}
       {renderValueModal()}
+      {renderShopifyPickerModal()}
       {renderDeleteModal()}
     </Page>
   );
