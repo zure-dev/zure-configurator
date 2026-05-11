@@ -7,6 +7,8 @@ import {
   OptionGroupError,
 } from '@/services/option-group.service';
 
+export const dynamic = 'force-dynamic';
+
 // GET /api/options?familyId=xxx
 // Returns groups for a specific product family
 //
@@ -28,28 +30,18 @@ export async function GET(request: NextRequest) {
 
     const groups = await listAllOptionGroups(tenant.storeId);
     return tenantResponse({ optionGroups: groups });
-  } catch (error) {
+  } catch (error: unknown) {
     if (error instanceof OptionGroupError) {
       return tenantError(error.message, error.httpStatus);
     }
 
-    console.error('[options/GET]', error);
-    return tenantError('Failed to fetch option groups', 500);
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[options/GET]', message, error);
+    return tenantError(`Failed to fetch option groups: ${message}`, 500);
   }
 }
 
 // POST /api/options
-// Body:
-// {
-//   productFamilyId: string,
-//   name: string,
-//   slug?: string,
-//   displayType?: string,
-//   sortOrder?: number,
-//   isRequired?: boolean,
-//   helperText?: string,
-//   stepNumber?: number
-// }
 export async function POST(request: NextRequest) {
   try {
     const tenant = await getTenantFromSession(request);
@@ -75,12 +67,13 @@ export async function POST(request: NextRequest) {
     });
 
     return tenantResponse({ optionGroup: group }, 201);
-  } catch (error) {
+  } catch (error: unknown) {
     if (error instanceof OptionGroupError) {
       return tenantError(error.message, error.httpStatus);
     }
 
-    console.error('[options/POST]', error);
-    return tenantError('Failed to create option group', 500);
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[options/POST]', message, error);
+    return tenantError(`Failed to create option group: ${message}`, 500);
   }
 }

@@ -7,6 +7,8 @@ import {
   ProductFamilyError,
 } from '@/services/product-family.service';
 
+export const dynamic = 'force-dynamic';
+
 // GET /api/product-families/[id]
 export async function GET(
   request: NextRequest,
@@ -20,14 +22,14 @@ export async function GET(
     if (!family) return tenantError('Product family not found', 404);
 
     return tenantResponse({ family });
-  } catch (error) {
-    console.error('[product-families/[id]/GET]', error);
-    return tenantError('Failed to fetch product family', 500);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[product-families/[id]/GET]', message, error);
+    return tenantError(`Failed to fetch product family: ${message}`, 500);
   }
 }
 
 // PUT /api/product-families/[id]
-// Body: { name?, handle?, category?, description?, shopifyProductId?, basePrice?, status?, defaultMediaSet? }
 export async function PUT(
   request: NextRequest,
   { params }: { params: { id: string } }
@@ -40,7 +42,7 @@ export async function PUT(
 
     const family = await updateProductFamily(tenant.storeId, params.id, {
       name: body.name,
-      handle: body.handle ?? body.slug, // accept slug for backward compat
+      handle: body.handle ?? body.slug,
       category: body.category,
       description: body.description,
       shopifyProductId: body.shopifyProductId ?? body.shopify_product_id,
@@ -50,12 +52,13 @@ export async function PUT(
     });
 
     return tenantResponse({ family });
-  } catch (error) {
+  } catch (error: unknown) {
     if (error instanceof ProductFamilyError) {
       return tenantError(error.message, error.httpStatus);
     }
-    console.error('[product-families/[id]/PUT]', error);
-    return tenantError('Failed to update product family', 500);
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[product-families/[id]/PUT]', message, error);
+    return tenantError(`Failed to update product family: ${message}`, 500);
   }
 }
 
@@ -71,11 +74,12 @@ export async function DELETE(
     await deleteProductFamily(tenant.storeId, params.id);
 
     return tenantResponse({ deleted: true });
-  } catch (error) {
+  } catch (error: unknown) {
     if (error instanceof ProductFamilyError) {
       return tenantError(error.message, error.httpStatus);
     }
-    console.error('[product-families/[id]/DELETE]', error);
-    return tenantError('Failed to delete product family', 500);
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[product-families/[id]/DELETE]', message, error);
+    return tenantError(`Failed to delete product family: ${message}`, 500);
   }
 }
