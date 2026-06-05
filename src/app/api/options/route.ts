@@ -10,16 +10,10 @@ import {
 export const dynamic = 'force-dynamic';
 
 // GET /api/options?familyId=xxx
-// Returns groups for a specific product family
-//
-// GET /api/options
-// Returns all option groups for the current store
 export async function GET(request: NextRequest) {
   try {
     const tenant = await getTenantFromSession(request);
-    if (!tenant) {
-      return tenantError('Unauthorized', 401);
-    }
+    if (!tenant) return tenantError('Unauthorized', 401);
 
     const familyId = request.nextUrl.searchParams.get('familyId');
 
@@ -34,7 +28,6 @@ export async function GET(request: NextRequest) {
     if (error instanceof OptionGroupError) {
       return tenantError(error.message, error.httpStatus);
     }
-
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error('[options/GET]', message, error);
     return tenantError(`Failed to fetch option groups: ${message}`, 500);
@@ -45,9 +38,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const tenant = await getTenantFromSession(request);
-    if (!tenant) {
-      return tenantError('Unauthorized', 401);
-    }
+    if (!tenant) return tenantError('Unauthorized', 401);
 
     const body = await request.json();
 
@@ -64,6 +55,8 @@ export async function POST(request: NextRequest) {
       isRequired: body.isRequired,
       helperText: body.helperText,
       stepNumber: body.stepNumber,
+      isConditional: body.isConditional,
+      visibilityConditions: body.visibilityConditions,
     });
 
     return tenantResponse({ optionGroup: group }, 201);
@@ -71,7 +64,6 @@ export async function POST(request: NextRequest) {
     if (error instanceof OptionGroupError) {
       return tenantError(error.message, error.httpStatus);
     }
-
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error('[options/POST]', message, error);
     return tenantError(`Failed to create option group: ${message}`, 500);

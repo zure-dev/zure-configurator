@@ -1,6 +1,6 @@
 import { db } from '@/lib/db';
+import { Prisma } from '@prisma/client';
 import { createAuditLog } from '@/lib/audit';
-import type { OptionDisplayType } from '@prisma/client';
 
 // ──────────────────────────────────────────────
 // Types
@@ -9,22 +9,26 @@ import type { OptionDisplayType } from '@prisma/client';
 export interface CreateOptionGroupInput {
   productFamilyId: string;
   name: string;
-  slug: string;
-  displayType?: OptionDisplayType;
+  slug?: string;
+  displayType?: string;
   sortOrder?: number;
   isRequired?: boolean;
   helperText?: string | null;
   stepNumber?: number | null;
+  isConditional?: boolean;
+  visibilityConditions?: Prisma.InputJsonValue | null;
 }
 
 export interface UpdateOptionGroupInput {
   name?: string;
   slug?: string;
-  displayType?: OptionDisplayType;
+  displayType?: string;
   sortOrder?: number;
   isRequired?: boolean;
   helperText?: string | null;
   stepNumber?: number | null;
+  isConditional?: boolean;
+  visibilityConditions?: Prisma.InputJsonValue | null;
 }
 
 // ──────────────────────────────────────────────
@@ -38,41 +42,47 @@ export function toSlug(name: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-/**
- * Verify that a product family belongs to the given store.
- * Returns the family or throws.
- */
 async function verifyFamilyOwnership(storeId: string, productFamilyId: string) {
   const family = await db.productFamily.findFirst({
     where: { id: productFamilyId, storeId },
+    select: { id: true, name: true, storeId: true },
   });
+
   if (!family) {
     throw new OptionGroupError('Product family not found', 'FAMILY_NOT_FOUND');
   }
+
   return family;
 }
 
-/**
- * Verify that an option group belongs to a store (via its product family).
- */
 async function verifyGroupOwnership(storeId: string, groupId: string) {
   const group = await db.optionGroup.findUnique({
     where: { id: groupId },
-    include: { productFamily: { select: { storeId: true } } },
+    include: {
+      productFamily: {
+        select: { id: true, name: true, storeId: true },
+      },
+    },
   });
-  if (!group || group.productFamily.storeId !== storeId) {
+
+  if (!group) {
     throw new OptionGroupError('Option group not found', 'NOT_FOUND');
   }
+
+  if (group.productFamily.storeId !== storeId) {
+    throw new OptionGroupError(
+      `Option group belongs to store "${group.productFamily.storeId}", not "${storeId}"`,
+      'STORE_MISMATCH'
+    );
+  }
+
   return group;
 }
 
 // ──────────────────────────────────────────────
-// CRUD
+// List
 // ──────────────────────────────────────────────
 
-/**
- * List option groups for a product family, with value counts.
- */
 export async function listOptionGroups(storeId: string, productFamilyId: string) {
   await verifyFamilyOwnership(storeId, productFamilyId);
 
@@ -86,9 +96,6 @@ export async function listOptionGroups(storeId: string, productFamilyId: string)
   });
 }
 
-/**
- * List ALL option groups across all families for a store (for the admin list page).
- */
 export async function listAllOptionGroups(storeId: string) {
   return db.optionGroup.findMany({
     where: {
@@ -96,48 +103,57 @@ export async function listAllOptionGroups(storeId: string) {
     },
     include: {
       values: { orderBy: { sortOrder: 'asc' } },
-      productFamily: { select: { id: true, name: true, handle: true } },
+      productFamily: { select: { id: true, name: true } },
     },
-    orderBy: [
-      { productFamily: { name: 'asc' } },
-      { sortOrder: 'asc' },
-    ],
+    orderBy: [{ productFamilyId: 'asc' }, { sortOrder: 'asc' }],
   });
 }
 
-/**
- * Get a single option group by ID.
- */
+// ──────────────────────────────────────────────
+// Get
+// ──────────────────────────────────────────────
+
 export async function getOptionGroup(storeId: string, groupId: string) {
   const group = await db.optionGroup.findUnique({
     where: { id: groupId },
     include: {
       values: { orderBy: { sortOrder: 'asc' } },
-      productFamily: { select: { id: true, name: true, storeId: true } },
+      productFamily: {
+        select: { id: true, name: true, storeId: true },
+      },
     },
   });
 
-  if (!group || group.productFamily.storeId !== storeId) return null;
+  if (!group) return null;
+  if (group.productFamily.storeId !== storeId) return null;
+
   return group;
 }
 
-/**
- * Create an option group.
- */
-export async function createOptionGroup(storeId: string, input: CreateOptionGroupInput) {
-  await verifyFamilyOwnership(storeId, input.productFamilyId);
+// ──────────────────────────────────────────────
+// Create
+// ──────────────────────────────────────────────
 
-  const slug = input.slug || toSlug(input.name);
+export async function createOptionGroup(
+  storeId: string,
+  input: CreateOptionGroupInput
+) {
+  const family = await verifyFamilyOwnership(storeId, input.productFamilyId);
 
-  // Check slug uniqueness within the family
-  const existing = await db.optionGroup.findUnique({
-    where: { productFamilyId_slug: { productFamilyId: input.productFamilyId, slug } },
+  const slug = (input.slug && input.slug.trim()) || toSlug(input.name);
+
+  const existing = await db.optionGroup.findFirst({
+    where: { productFamilyId: input.productFamilyId, slug },
+    select: { id: true },
   });
+
   if (existing) {
-    throw new OptionGroupError(`Slug "${slug}" already exists in this product family`, 'DUPLICATE_SLUG');
+    throw new OptionGroupError(
+      `Slug "${slug}" already exists in this product family`,
+      'DUPLICATE_SLUG'
+    );
   }
 
-  // Auto-calculate sortOrder if not provided
   let sortOrder = input.sortOrder;
   if (sortOrder === undefined) {
     const maxGroup = await db.optionGroup.findFirst({
@@ -153,11 +169,15 @@ export async function createOptionGroup(storeId: string, input: CreateOptionGrou
       productFamilyId: input.productFamilyId,
       name: input.name,
       slug,
-      displayType: input.displayType ?? 'TILE',
+      displayType: (input.displayType as any) ?? 'TILE',
       sortOrder,
       isRequired: input.isRequired ?? true,
       helperText: input.helperText ?? null,
       stepNumber: input.stepNumber ?? null,
+      isConditional: input.isConditional ?? false,
+      visibilityConditions: input.visibilityConditions != null
+        ? input.visibilityConditions
+        : Prisma.JsonNull,
     },
     include: {
       values: { orderBy: { sortOrder: 'asc' } },
@@ -171,14 +191,19 @@ export async function createOptionGroup(storeId: string, input: CreateOptionGrou
     entityType: 'OptionGroup',
     entityId: group.id,
     after: group,
+    metadata: {
+      productFamilyId: family.id,
+      productFamilyName: family.name,
+    },
   });
 
   return group;
 }
 
-/**
- * Update an option group.
- */
+// ──────────────────────────────────────────────
+// Update
+// ──────────────────────────────────────────────
+
 export async function updateOptionGroup(
   storeId: string,
   groupId: string,
@@ -186,29 +211,46 @@ export async function updateOptionGroup(
 ) {
   const existing = await verifyGroupOwnership(storeId, groupId);
 
-  // If slug is changing, check uniqueness
-  if (input.slug && input.slug !== existing.slug) {
-    const conflict = await db.optionGroup.findUnique({
+  const nextSlug =
+    input.slug !== undefined
+      ? input.slug
+      : input.name !== undefined
+        ? toSlug(input.name)
+        : undefined;
+
+  if (nextSlug && nextSlug !== existing.slug) {
+    const conflict = await db.optionGroup.findFirst({
       where: {
-        productFamilyId_slug: {
-          productFamilyId: existing.productFamilyId,
-          slug: input.slug,
-        },
+        productFamilyId: existing.productFamilyId,
+        slug: nextSlug,
+        NOT: { id: groupId },
       },
+      select: { id: true },
     });
+
     if (conflict) {
-      throw new OptionGroupError(`Slug "${input.slug}" already exists in this product family`, 'DUPLICATE_SLUG');
+      throw new OptionGroupError(
+        `Slug "${nextSlug}" already exists in this product family`,
+        'DUPLICATE_SLUG'
+      );
     }
   }
 
   const updateData: Record<string, unknown> = {};
+
   if (input.name !== undefined) updateData.name = input.name;
-  if (input.slug !== undefined) updateData.slug = input.slug;
+  if (nextSlug !== undefined) updateData.slug = nextSlug;
   if (input.displayType !== undefined) updateData.displayType = input.displayType;
   if (input.sortOrder !== undefined) updateData.sortOrder = input.sortOrder;
   if (input.isRequired !== undefined) updateData.isRequired = input.isRequired;
   if (input.helperText !== undefined) updateData.helperText = input.helperText;
   if (input.stepNumber !== undefined) updateData.stepNumber = input.stepNumber;
+  if (input.isConditional !== undefined) updateData.isConditional = input.isConditional;
+  if (input.visibilityConditions !== undefined) {
+    updateData.visibilityConditions = input.visibilityConditions != null
+      ? input.visibilityConditions
+      : Prisma.JsonNull;
+  }
 
   const updated = await db.optionGroup.update({
     where: { id: groupId },
@@ -231,9 +273,10 @@ export async function updateOptionGroup(
   return updated;
 }
 
-/**
- * Delete an option group (cascades to values).
- */
+// ──────────────────────────────────────────────
+// Delete
+// ──────────────────────────────────────────────
+
 export async function deleteOptionGroup(storeId: string, groupId: string) {
   const existing = await verifyGroupOwnership(storeId, groupId);
 
@@ -257,7 +300,8 @@ export async function deleteOptionGroup(storeId: string, groupId: string) {
 export type OptionGroupErrorCode =
   | 'NOT_FOUND'
   | 'FAMILY_NOT_FOUND'
-  | 'DUPLICATE_SLUG';
+  | 'DUPLICATE_SLUG'
+  | 'STORE_MISMATCH';
 
 export class OptionGroupError extends Error {
   code: OptionGroupErrorCode;
@@ -275,6 +319,8 @@ export class OptionGroupError extends Error {
         return 404;
       case 'DUPLICATE_SLUG':
         return 400;
+      case 'STORE_MISMATCH':
+        return 403;
       default:
         return 500;
     }

@@ -31,11 +31,11 @@ model Store {
   merchantId         String
   merchant           Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   shopifyDomain      String   @unique
-  shopifyAccessToken String   // encrypted at rest via application layer
+  shopifyAccessToken String
   shopifyPlan        String?
   currency           String   @default("AUD")
   timezone           String   @default("Australia/Sydney")
-  settings           Json?    // store-level config: theme prefs, trade tag name, etc.
+  settings           Json?
   installedAt        DateTime @default(now())
   uninstalledAt      DateTime?
 
@@ -54,19 +54,15 @@ model ProductFamily {
   id          String @id @default(cuid())
   storeId     String
   store       Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  name        String // "Zure Vanity 600-1500mm"
-  handle      String // URL-friendly identifier, e.g. "zure-vanity-600-1500"
-  slug        String // Legacy alias — kept for backward compat, mirrors handle
-  category    String?  // e.g. "vanities", "cabinetry", "benchtops"
+  name        String
+  handle      String
+  slug        String
+  category    String?
   description String?
   status      ProductFamilyStatus @default(DRAFT)
   basePrice   Decimal             @default(0) @db.Decimal(10, 2)
-
-  // Direct Shopify product link (denormalized for fast lookup)
-  shopifyProductId String?  // e.g. "gid://shopify/Product/123456" or numeric
-
-  // Default media set (lowest priority in cascade)
-  defaultMediaSet Json? // [{ url, alt, sortOrder, type }]
+  shopifyProductId String?
+  defaultMediaSet Json?
 
   shopifyLink    ProductFamilyShopifyLink?
   optionGroups   OptionGroup[]
@@ -100,9 +96,9 @@ model ProductFamilyShopifyLink {
   id                   String        @id @default(cuid())
   productFamilyId      String        @unique
   productFamily        ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
-  shopifyProductId     String        // e.g. "gid://shopify/Product/123456"
-  shopifyProductNumericId String?    // numeric for Cart API
-  shopifyVariantId     String?       // default variant used for cart line
+  shopifyProductId     String
+  shopifyProductNumericId String?
+  shopifyVariantId     String?
   shopifyVariantNumericId String?
   shopifyProductHandle String?
   syncedAt             DateTime?
@@ -119,13 +115,23 @@ model OptionGroup {
   id              String        @id @default(cuid())
   productFamilyId String
   productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
-  name            String        // "Vanity Size"
-  slug            String        // "vanity-size"
+  name            String
+  slug            String
   displayType     OptionDisplayType @default(TILE)
   sortOrder       Int           @default(0)
   isRequired      Boolean       @default(true)
   helperText      String?
-  stepNumber      Int?          // which step in the configurator UX
+  stepNumber      Int?
+
+  // ── Conditional Visibility ──
+  // When enabled, this group only appears if the conditions are met.
+  // Hidden groups do not contribute to validation, pricing, or cart output.
+  isConditional        Boolean  @default(false)
+  // Array of condition objects:
+  // [{ sourceGroupSlug: string, operator: "equals"|"not_equals", sourceValueSlug: string, connector: "AND"|"OR"|null }]
+  // Last condition's connector should be null.
+  // Evaluation: split by OR, AND within each group. Any OR-segment passing = visible.
+  visibilityConditions Json?
 
   values OptionValue[]
 
@@ -147,26 +153,24 @@ model OptionValue {
   id            String      @id @default(cuid())
   optionGroupId String
   optionGroup   OptionGroup @relation(fields: [optionGroupId], references: [id], onDelete: Cascade)
-  name          String      // "600mm", "Woodland Oak"
-  slug          String      // "600mm", "woodland-oak"
+  name          String
+  slug          String
   sortOrder     Int         @default(0)
   isDefault     Boolean     @default(false)
-  swatchColor   String?     // hex color e.g. "#8B6914"
-  swatchImage   String?     // URL to swatch image
-  thumbnailUrl  String?     // URL to thumbnail image
-  description   String?     // Short description for tooltip
-  metadata      Json?       // arbitrary KV for future use
+  swatchColor   String?
+  swatchImage   String?
+  thumbnailUrl  String?
+  description   String?
+  metadata      Json?
 
   // ── Linked Shopify Product/Variant (Phase 1) ──
-  // Optional: link this option value to a real Shopify product/variant
-  // so inventory can update when this option is selected in a bundle.
-  shopifyProductId    String?                // e.g. "gid://shopify/Product/123"
-  shopifyVariantId    String?                // e.g. "gid://shopify/ProductVariant/456"
-  shopifyProductTitle String?                // cached product title for admin display
-  shopifyVariantTitle String?                // cached variant title (e.g. "Large / Oak")
-  shopifySku          String?                // cached SKU for admin display
-  shopifyImageUrl     String?                // cached product/variant image URL
-  shopifyPrice        Decimal? @db.Decimal(10, 2) // cached standalone Shopify price
+  shopifyProductId    String?
+  shopifyVariantId    String?
+  shopifyProductTitle String?
+  shopifyVariantTitle String?
+  shopifySku          String?
+  shopifyImageUrl     String?
+  shopifyPrice        Decimal? @db.Decimal(10, 2)
 
   @@unique([optionGroupId, slug])
   @@index([optionGroupId, sortOrder])
@@ -181,16 +185,13 @@ model OptionDependencyRule {
   id              String        @id @default(cuid())
   productFamilyId String
   productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
-  name            String?       // human-readable name for admin
+  name            String?
   description     String?
 
-  // "When option group X has value Y selected..."
   whenOptionGroupSlug  String
   whenOptionValueSlug  String
-
-  // "...then option group Z should only allow these values"
   thenOptionGroupSlug  String
-  thenOptionValueSlugs String[]  // array of value slugs that become available
+  thenOptionValueSlugs String[]
 
   isActive      Boolean  @default(true)
   ruleVersionId String?
@@ -207,11 +208,8 @@ model OptionExclusionRule {
   name            String?
   description     String?
 
-  // "When option group X has value Y selected..."
   whenOptionGroupSlug  String
   whenOptionValueSlug  String
-
-  // "...then option group Z should NOT allow these values"
   excludeOptionGroupSlug  String
   excludeOptionValueSlugs String[]
 
@@ -231,11 +229,8 @@ model PriceRule {
 
   optionGroupSlug String
   optionValueSlug String
-  priceModifier   Decimal @db.Decimal(10, 2) // e.g. +269.00 or -50.00
+  priceModifier   Decimal @db.Decimal(10, 2)
   modifierType    PriceModifierType @default(ADDITIVE)
-
-  // Optional: only apply when other selections match
-  // e.g. [{ "optionGroupSlug": "vanity-size", "optionValueSlug": "1500mm" }]
   conditions Json?
 
   isActive      Boolean  @default(true)
@@ -256,12 +251,7 @@ model TradePriceRule {
   optionValueSlug String
   priceModifier   Decimal @db.Decimal(10, 2)
   modifierType    PriceModifierType @default(ADDITIVE)
-
-  // How to identify trade customers
-  // e.g. { "type": "customer_tag", "value": "trade" }
   tradeCondition Json
-
-  // Optional: additional conditions
   conditions Json?
 
   isActive      Boolean  @default(true)
@@ -273,10 +263,10 @@ model TradePriceRule {
 }
 
 enum PriceModifierType {
-  ADDITIVE     // +$269
-  PERCENTAGE   // +10%
-  ABSOLUTE     // set to $X (replaces base)
-  OVERRIDE     // replace base price entirely
+  ADDITIVE
+  PERCENTAGE
+  ABSOLUTE
+  OVERRIDE
 }
 
 model MediaRule {
@@ -284,21 +274,11 @@ model MediaRule {
   productFamilyId String
   productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
   name            String?
-
-  // Higher priority overrides lower priority
-  // 0 = family default, 10 = finish override, 20 = basin/top override, 30 = exact match
-  priority Int @default(0)
-
-  // Conditions that must all match for this rule to fire
-  // [{ "optionGroupSlug": "cabinet-finish", "optionValueSlug": "woodland-oak" }]
-  conditions Json
-
-  // Media set to apply when conditions match
-  // [{ "url": "https://...", "alt": "...", "sortOrder": 0, "type": "hero" | "gallery" }]
-  mediaSet Json
-
-  isActive      Boolean  @default(true)
-  ruleVersionId String?
+  priority        Int @default(0)
+  conditions      Json
+  mediaSet        Json
+  isActive        Boolean  @default(true)
+  ruleVersionId   String?
 
   @@index([productFamilyId, priority])
   @@map("media_rules")
@@ -310,12 +290,8 @@ model SummaryRule {
   productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
 
   optionGroupSlug String
-  // Template with Mustache-style placeholders
-  // e.g. "Size: {{value}}", "Top: {{value}} (+{{priceDelta}})"
   template  String
   sortOrder Int @default(0)
-
-  // Whether to include this in the line item summary
   includeInLineItem Boolean @default(true)
 
   @@index([productFamilyId, sortOrder])
@@ -330,10 +306,10 @@ model Component {
   id              String        @id @default(cuid())
   productFamilyId String
   productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
-  name            String        // "Woodland Oak Cabinet 900mm"
-  sku             String        // Internal SKU
+  name            String
+  sku             String
   type            ComponentType
-  shopifyProductId  String?     // Shopify internal product (may not be customer-facing)
+  shopifyProductId  String?
   shopifyVariantId  String?
   metadata        Json?
 
@@ -359,12 +335,7 @@ model ConfigurationToComponentMap {
   id              String        @id @default(cuid())
   productFamilyId String
   productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
-
-  // Conditions (all must match) to map to this component
-  // [{ "optionGroupSlug": "vanity-size", "optionValueSlug": "900mm" },
-  //  { "optionGroupSlug": "cabinet-finish", "optionValueSlug": "woodland-oak" }]
   conditions Json
-
   componentId String
   quantity    Int @default(1)
 
@@ -373,7 +344,7 @@ model ConfigurationToComponentMap {
 }
 
 // ──────────────────────────────────────────────
-// INVENTORY (Phase 2 activation, schema-ready now)
+// INVENTORY
 // ──────────────────────────────────────────────
 
 model InventoryPolicy {
@@ -393,9 +364,9 @@ model InventoryPolicy {
 }
 
 enum InventoryTrackingMode {
-  NONE   // Phase 1: no tracking
-  SOFT   // Phase 2: display-only availability
-  HARD   // Phase 3: deduct at checkout
+  NONE
+  SOFT
+  HARD
 }
 
 // ──────────────────────────────────────────────
@@ -408,10 +379,9 @@ model ConfigurationSession {
   store           Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
   productFamilyId String
   shopifyProductId String?
-  customerIdent   String? // anonymous session ID or Shopify customer ID
+  customerIdent   String?
   isTradeCustomer Boolean @default(false)
 
-  // Current live selections { "vanity-size": "900mm", "cabinet-finish": "woodland-oak" }
   selections    Json
   resolvedPrice Decimal? @db.Decimal(10, 2)
 
@@ -444,19 +414,16 @@ model ConfigurationSnapshot {
   productFamilyId String
   ruleVersionId   String
 
-  // Full frozen state at time of Add to Cart
-  selections        Json  // { "vanity-size": { "slug": "900mm", "name": "900mm" }, ... }
-  pricingBreakdown  Json  // { basePrice, modifiers[], totalPrice, isTradePrice, ... }
-  mediaState        Json  // { heroImage, gallery[], appliedRules[] }
-  componentMappings Json  // [{ componentId, sku, name, quantity }]
-  tradeState        Json? // trade-specific pricing if applicable
+  selections        Json
+  pricingBreakdown  Json
+  mediaState        Json
+  componentMappings Json
+  tradeState        Json?
 
-  // Human-readable summary
-  summaryText       String // "900mm | Woodland Oak | Calacatta Quartz (+$269) | ..."
-  summaryStructured Json   // [{ label, value, priceDelta }]
+  summaryText       String
+  summaryStructured Json
 
-  // Integrity
-  validationSignature String // SHA-256 hash of inputs + outputs
+  validationSignature String
 
   cartResolution CartResolutionRecord?
 
@@ -472,8 +439,8 @@ model CartResolutionRecord {
   snapshot   ConfigurationSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
 
   shopifyCartToken    String?
-  shopifyVariantId    String // variant ID added to cart
-  lineItemProperties  Json   // what was sent to Shopify Cart API
+  shopifyVariantId    String
+  lineItemProperties  Json
   resolvedPrice       Decimal @db.Decimal(10, 2)
 
   orderResolution OrderResolutionRecord?
@@ -490,12 +457,12 @@ model OrderResolutionRecord {
   cartResolution   CartResolutionRecord @relation(fields: [cartResolutionId], references: [id], onDelete: Cascade)
 
   shopifyOrderId    String?
-  shopifyOrderName  String?  // e.g. "#1042"
+  shopifyOrderName  String?
   shopifyLineItemId String?
 
-  componentSkus    Json  // resolved component SKUs + quantities at order time
-  stockLogicState  Json? // inventory state snapshot
-  leadTimeState    Json? // lead time info at order time
+  componentSkus    Json
+  stockLogicState  Json?
+  leadTimeState    Json?
 
   fulfilmentStatus String?
   notes            String?
@@ -517,13 +484,9 @@ model RuleVersion {
   productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
   version         Int
   description     String?
-
-  // Full snapshot of all rules at this version
   snapshotData Json
-
   publishedAt DateTime?
   createdBy   String?
-
   createdAt DateTime @default(now())
 
   @@unique([productFamilyId, version])
@@ -538,12 +501,12 @@ model AuditLog {
   userName String?
 
   action     AuditAction
-  entityType String // "ProductFamily", "OptionGroup", "PriceRule", etc.
+  entityType String
   entityId   String
 
-  before   Json?  // state before change
-  after    Json?  // state after change
-  metadata Json?  // additional context
+  before   Json?
+  after    Json?
+  metadata Json?
 
   createdAt DateTime @default(now())
 

@@ -7,6 +7,8 @@ import {
   OptionGroupError,
 } from '@/services/option-group.service';
 
+export const dynamic = 'force-dynamic';
+
 // GET /api/options/[id]
 export async function GET(
   request: NextRequest,
@@ -20,14 +22,14 @@ export async function GET(
     if (!group) return tenantError('Option group not found', 404);
 
     return tenantResponse({ optionGroup: group });
-  } catch (error) {
-    console.error('[options/[id]/GET]', error);
-    return tenantError('Failed to fetch option group', 500);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[options/[id]/GET]', message, error);
+    return tenantError(`Failed to fetch option group: ${message}`, 500);
   }
 }
 
 // PUT /api/options/[id]
-// Body: { name?, slug?, displayType?, sortOrder?, isRequired?, helperText?, stepNumber? }
 export async function PUT(
   request: NextRequest,
   { params }: { params: { id: string } }
@@ -46,15 +48,18 @@ export async function PUT(
       isRequired: body.isRequired,
       helperText: body.helperText,
       stepNumber: body.stepNumber,
+      isConditional: body.isConditional,
+      visibilityConditions: body.visibilityConditions,
     });
 
     return tenantResponse({ optionGroup: group });
-  } catch (error) {
+  } catch (error: unknown) {
     if (error instanceof OptionGroupError) {
       return tenantError(error.message, error.httpStatus);
     }
-    console.error('[options/[id]/PUT]', error);
-    return tenantError('Failed to update option group', 500);
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[options/[id]/PUT]', message, error);
+    return tenantError(`Failed to update option group: ${message}`, 500);
   }
 }
 
@@ -70,11 +75,12 @@ export async function DELETE(
     await deleteOptionGroup(tenant.storeId, params.id);
 
     return tenantResponse({ deleted: true });
-  } catch (error) {
+  } catch (error: unknown) {
     if (error instanceof OptionGroupError) {
       return tenantError(error.message, error.httpStatus);
     }
-    console.error('[options/[id]/DELETE]', error);
-    return tenantError('Failed to delete option group', 500);
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[options/[id]/DELETE]', message, error);
+    return tenantError(`Failed to delete option group: ${message}`, 500);
   }
 }
