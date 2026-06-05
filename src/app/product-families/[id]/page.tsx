@@ -235,6 +235,11 @@ export default function ProductFamilyBuilderPage() {
   // Duplicate
   const [duplicating, setDuplicating] = useState(false);
 
+  // Clipboard
+  const [clipboardInfo, setClipboardInfo] = useState<{ id: string; label: string; valueCount: number } | null>(null);
+  const [copying, setCopying] = useState(false);
+  const [pasting, setPasting] = useState(false);
+
   // Preview
   const [previewSelections, setPreviewSelections] = useState<Record<string, string>>({});
 
@@ -259,6 +264,51 @@ export default function ProductFamilyBuilderPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
   useEffect(() => { if (!successMsg) return; const t = setTimeout(() => setSuccessMsg(''), 3000); return () => clearTimeout(t); }, [successMsg]);
+
+  // ── CLIPBOARD ──
+  const loadClipboard = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/options/clipboard');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.hasClipboard && data.clipboard) {
+        setClipboardInfo({ id: data.clipboard.id, label: data.clipboard.label ?? '', valueCount: data.clipboard.valueCount ?? 0 });
+      } else {
+        setClipboardInfo(null);
+      }
+    } catch { /* ignore clipboard check failures */ }
+  }, []);
+
+  useEffect(() => { loadClipboard(); }, [loadClipboard]);
+
+  const handleCopyGroup = useCallback(async (groupId: string, groupName: string) => {
+    setCopying(true);
+    try {
+      const res = await apiFetch(`/api/options/${groupId}/copy`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error ?? 'Copy failed'); return; }
+      setClipboardInfo({ id: data.clipboardId, label: data.label ?? groupName, valueCount: data.valueCount ?? 0 });
+      setSuccessMsg(`"${groupName}" copied to clipboard`);
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Copy failed'); }
+    finally { setCopying(false); }
+  }, []);
+
+  const handlePasteGroup = useCallback(async () => {
+    if (!clipboardInfo) return;
+    setPasting(true);
+    try {
+      const res = await apiFetch('/api/options/paste', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clipboardId: clipboardInfo.id, productFamilyId: familyId }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error ?? 'Paste failed'); return; }
+      setSuccessMsg(`"${clipboardInfo.label}" pasted`);
+      await loadData();
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Paste failed'); }
+    finally { setPasting(false); }
+  }, [clipboardInfo, familyId, loadData]);
 
   // ── IMAGE UPLOAD ──
   const handleImageUpload = useCallback(async (file: File) => {
@@ -458,7 +508,6 @@ export default function ProductFamilyBuilderPage() {
       const row = next[index];
       if (!row) return prev;
       let updatedRow: ConditionRow = { ...row, [field]: value };
-      // Reset value when group changes
       if (field === 'sourceGroupSlug') updatedRow = { ...updatedRow, sourceValueSlug: '' };
       next[index] = updatedRow;
       return { ...prev, conditions: next };
@@ -558,7 +607,14 @@ export default function ProductFamilyBuilderPage() {
     return (<BlockStack gap="400">
       <InlineStack align="space-between" blockAlign="center">
         <Text as="h2" variant="headingSm">Option Groups</Text>
-        <Button onClick={openAddGroup}>Add Option Group</Button>
+        <InlineStack gap="200">
+          {clipboardInfo && (
+            <Button onClick={handlePasteGroup} loading={pasting} variant="secondary">
+              {`Paste "${clipboardInfo.label}"`}
+            </Button>
+          )}
+          <Button onClick={openAddGroup}>Add Option Group</Button>
+        </InlineStack>
       </InlineStack>
       {groups.length === 0 && (<Card><BlockStack gap="200">
         <Text as="p" variant="bodyMd">No option groups yet.</Text>
@@ -581,6 +637,7 @@ export default function ProductFamilyBuilderPage() {
               <InlineStack gap="100">
                 <Button size="slim" variant="plain" onClick={() => openEditGroup(group)}>Edit</Button>
                 <Button size="slim" variant="plain" onClick={() => handleDuplicateGroup(group.id, group.name)} loading={duplicating}>Duplicate</Button>
+                <Button size="slim" variant="plain" onClick={() => handleCopyGroup(group.id, group.name)} loading={copying}>Copy</Button>
                 <Button size="slim" variant="plain" tone="critical" onClick={() => setDeleteTarget({ type: 'group', id: group.id, name: group.name })}>Delete</Button>
               </InlineStack>
             </InlineStack>

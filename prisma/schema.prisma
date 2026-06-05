@@ -526,3 +526,29 @@ enum AuditAction {
   DEACTIVATE
   ARCHIVE
 }
+
+// ──────────────────────────────────────────────
+// ADD THIS MODEL to the end of prisma/schema.prisma,
+// BEFORE the final closing content (after AuditAction enum).
+// ──────────────────────────────────────────────
+
+// ──────────────────────────────────────────────
+// OPTION GROUP CLIPBOARD / TEMPLATES
+// ──────────────────────────────────────────────
+
+model OptionGroupClipboard {
+  id        String   @id @default(cuid())
+  storeId   String
+  label     String?                     // display name (auto-filled from group name)
+  data      Json                        // serialized group + values snapshot
+  isTemplate Boolean @default(false)    // future: persistent reusable templates
+  createdAt DateTime @default(now())
+  expiresAt DateTime?                   // null for templates; set for clipboard entries
+
+  @@index([storeId, createdAt])
+  @@map("option_group_clipboard")
+}
+
+// Then run:
+//   npx prisma migrate dev --name add-option-group-clipboard
+//   npx prisma migrate deploy   (production)
