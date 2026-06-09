@@ -3,3 +3,5 @@ name = "Configurator Widget"
 uid = "ce20a1ee-563a-a026-d386-741f41e8e52181fd4834"
 
 type = "theme"
+
+api_version = "2024-01"

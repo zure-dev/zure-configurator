@@ -11,9 +11,15 @@
     data-product-handle="{{ product.handle }}"
     data-shop="{{ shop.permanent_domain }}"
     data-app-url="{{ block.settings.app_url }}"
+    data-currency="{{ shop.currency }}"
+    data-show-prices="{{ block.settings.show_prices }}"
+    data-show-required="{{ block.settings.show_required }}"
     style="min-height: 200px;"
   >
-    {%- comment -%} Widget loads here via JS {%- endcomment -%}
+    <div class="zure-cfg-loading">
+      <div class="zure-cfg-spinner"></div>
+      <p>Loading configurator...</p>
+    </div>
     <noscript>
       <p style="padding: 20px; text-align: center; color: #6f6f6f;">
         JavaScript is required to use the product configurator.
@@ -22,11 +28,21 @@
     </noscript>
   </div>
 
+  {% if block.settings.hide_native_options %}
+    <style>
+      .product-form__input--variant,
+      .product-form__variants,
+      [data-variant-selects],
+      .variant-selects,
+      .product__variant-picker { display: none !important; }
+    </style>
+  {% endif %}
+
   {{ 'configurator.css' | asset_url | stylesheet_tag }}
   <script src="{{ 'configurator.js' | asset_url }}" defer></script>
 
   {% comment %}
-    Optional: lightweight theme bridge script.
+    Theme bridge script.
     Listens for configurator events and updates native theme elements.
     This is the ONLY theme integration point. Remove if not needed.
   {% endcomment %}
@@ -82,6 +98,18 @@
       "label": "Hide native variant selectors",
       "default": true,
       "info": "When enabled, hides Shopify's native variant selectors on this product page"
+    },
+    {
+      "type": "checkbox",
+      "id": "show_prices",
+      "label": "Show price modifiers",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_required",
+      "label": "Show required indicators",
+      "default": true
     }
   ]
 }

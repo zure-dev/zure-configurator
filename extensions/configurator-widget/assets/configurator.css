@@ -1,11 +1,258 @@
+/* ──────────────────────────────────────────────
+   Zure Configurator — Storefront Styles
+   All selectors scoped to #zure-configurator-root
+   and .zure-cfg- prefix to avoid theme conflicts.
+   ────────────────────────────────────────────── */
+
 #zure-configurator-root {
-  padding: 16px;
-  border: 1px solid #d9d9d9;
-  border-radius: 8px;
-  margin-top: 16px;
-  background: #fafafa;
+  font-family: inherit;
+  line-height: 1.5;
+  color: inherit;
 }
 
-#zure-configurator-root h3 {
-  margin: 0 0 8px;
+/* ── Loading ── */
+.zure-cfg-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 40px 0;
+  color: #888;
+  font-size: 14px;
+}
+.zure-cfg-spinner {
+  width: 28px; height: 28px;
+  border: 2px solid #e5e5e5;
+  border-top-color: #333;
+  border-radius: 50%;
+  animation: zure-spin 0.7s linear infinite;
+}
+@keyframes zure-spin { to { transform: rotate(360deg); } }
+
+/* ── Error ── */
+.zure-cfg-error {
+  padding: 16px 20px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  color: #991b1b;
+  font-size: 14px;
+}
+
+/* ── Empty ── */
+.zure-cfg-empty {
+  padding: 20px;
+  color: #888;
+  font-size: 14px;
+  text-align: center;
+}
+
+/* ── Group ── */
+.zure-cfg-group {
+  margin-bottom: 24px;
+}
+.zure-cfg-group-header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.zure-cfg-group-name {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: inherit;
+}
+.zure-cfg-required {
+  color: #dc2626;
+  font-size: 13px;
+  font-weight: 500;
+}
+.zure-cfg-helper {
+  font-size: 13px;
+  color: #888;
+  margin-bottom: 10px;
+}
+
+/* ── Values grid ── */
+.zure-cfg-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ── Button value (default) ── */
+.zure-cfg-value {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 10px 18px;
+  min-width: 60px;
+  border: 1.5px solid #e0e0e0;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 13px;
+  color: #333;
+  text-align: center;
+  user-select: none;
+}
+.zure-cfg-value:hover {
+  border-color: #999;
+}
+.zure-cfg-value[data-selected="true"] {
+  border-color: #111;
+  background: #f8f8f8;
+  font-weight: 600;
+  box-shadow: 0 0 0 1px #111;
+}
+
+/* ── Swatch value ── */
+.zure-cfg-swatch {
+  padding: 6px;
+  min-width: auto;
+}
+.zure-cfg-swatch-circle {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  border: 1.5px solid #ddd;
+  transition: all 0.15s ease;
+}
+.zure-cfg-value[data-selected="true"] .zure-cfg-swatch-circle {
+  border-color: #111;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px #111;
+}
+
+/* ── Image/thumbnail value ── */
+.zure-cfg-image {
+  padding: 6px;
+  min-width: auto;
+}
+.zure-cfg-image-thumb {
+  width: 56px; height: 56px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+/* ── Value label ── */
+.zure-cfg-value-label {
+  font-size: 12px;
+  line-height: 1.3;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Price modifier ── */
+.zure-cfg-price-mod {
+  font-size: 11px;
+  color: #666;
+  margin-top: 2px;
+}
+
+/* ── Dropdown ── */
+.zure-cfg-dropdown {
+  width: 100%;
+  max-width: 320px;
+  padding: 10px 14px;
+  border: 1.5px solid #e0e0e0;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 14px;
+  color: #333;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23666' fill='none' stroke-width='1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+}
+.zure-cfg-dropdown:focus {
+  outline: none;
+  border-color: #111;
+}
+
+/* ── Price summary ── */
+.zure-cfg-price-summary {
+  margin-top: 20px;
+  padding: 16px 0;
+  border-top: 1px solid #eee;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.zure-cfg-price-label {
+  font-size: 13px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.zure-cfg-price-value {
+  font-size: 22px;
+  font-weight: 600;
+  color: #111;
+}
+
+/* ── CTA ── */
+.zure-cfg-cta {
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+  padding: 14px 24px;
+  background: #111;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  text-align: center;
+}
+.zure-cfg-cta:hover {
+  background: #333;
+}
+.zure-cfg-cta:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+/* ── Status message ── */
+.zure-cfg-status {
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  color: #166534;
+  font-size: 13px;
+  text-align: center;
+}
+
+/* ── Hidden conditional group ── */
+.zure-cfg-hidden {
+  display: none;
+}
+
+/* ── Mobile responsive ── */
+@media (max-width: 480px) {
+  .zure-cfg-values {
+    gap: 6px;
+  }
+  .zure-cfg-value {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+  .zure-cfg-image-thumb {
+    width: 44px; height: 44px;
+  }
+  .zure-cfg-price-value {
+    font-size: 20px;
+  }
 }
