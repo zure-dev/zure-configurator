@@ -4,7 +4,7 @@ import { db } from '@/lib/db';
 export const dynamic = 'force-dynamic';
 
 // ──────────────────────────────────────────────
-// CORS headers for storefront cross-origin requests
+// CORS
 // ──────────────────────────────────────────────
 
 function corsHeaders(): HeadersInit {
@@ -16,72 +16,119 @@ function corsHeaders(): HeadersInit {
   };
 }
 
-// OPTIONS — preflight
 export async function OPTIONS() {
   return new Response(null, { status: 204, headers: corsHeaders() });
 }
 
 // ──────────────────────────────────────────────
 // GET /api/storefront/configurator
-//
-// Query params:
-//   shop       — Shopify domain (required for tenant resolution)
-//   productId  — Shopify product GID or numeric ID
-//   handle     — Shopify product handle (fallback)
-//
-// Returns customer-safe configurator data.
-// Does NOT expose tokens, audit logs, or admin metadata.
 // ──────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
-  try {
-    const shopDomain = request.nextUrl.searchParams.get('shop');
-    const productId = request.nextUrl.searchParams.get('productId');
-    const handle = request.nextUrl.searchParams.get('handle');
+  const shopDomain = request.nextUrl.searchParams.get('shop') ?? '';
+  const productId = request.nextUrl.searchParams.get('productId') ?? '';
+  const handle = request.nextUrl.searchParams.get('handle') ?? '';
 
+  // Build debug context (included in error responses for troubleshooting)
+  const debug = {
+    shop: shopDomain,
+    productId,
+    handle,
+    normalizedProductIds: [] as string[],
+    storeFound: false,
+    familySearched: false,
+    familyFoundInactive: false,
+  };
+
+  try {
     if (!shopDomain) {
       return Response.json(
-        { error: 'shop parameter is required' },
+        { error: 'MISSING_SHOP', message: 'shop parameter is required', debug },
         { status: 400, headers: corsHeaders() }
       );
     }
 
     if (!productId && !handle) {
       return Response.json(
-        { error: 'productId or handle is required' },
+        { error: 'MISSING_PRODUCT', message: 'productId or handle is required', debug },
         { status: 400, headers: corsHeaders() }
       );
     }
 
-    // Resolve store
+    // ── Resolve store ──
     const store = await db.store.findUnique({
       where: { shopifyDomain: shopDomain },
-      select: { id: true },
+      select: { id: true, shopifyDomain: true },
     });
 
     if (!store) {
+      console.warn('[storefront/configurator] Store not found:', shopDomain);
       return Response.json(
-        { error: 'Store not found' },
+        { error: 'STORE_NOT_FOUND', message: `No store found for domain "${shopDomain}"`, debug },
         { status: 404, headers: corsHeaders() }
       );
     }
 
-    // Resolve product family — try productId first, then handle
-    let family = null;
+    debug.storeFound = true;
+
+    // ── Build all possible product ID formats to match against ──
+    const productIdCandidates: string[] = [];
 
     if (productId) {
-      // Try matching by GID or numeric ID
+      // Raw value as-is
+      productIdCandidates.push(productId);
+
+      // If numeric, also try GID format
+      if (/^\d+$/.test(productId)) {
+        productIdCandidates.push(`gid://shopify/Product/${productId}`);
+      }
+
+      // If GID, also try numeric extraction
+      const gidMatch = productId.match(/gid:\/\/shopify\/Product\/(\d+)/);
+      if (gidMatch) {
+        const numericPart = gidMatch[1];
+        if (numericPart) productIdCandidates.push(numericPart);
+      }
+    }
+
+    debug.normalizedProductIds = productIdCandidates;
+    debug.familySearched = true;
+
+    // ── Resolve product family — try productId first, then handle ──
+    let family = null;
+
+    if (productIdCandidates.length > 0) {
       family = await db.productFamily.findFirst({
         where: {
           storeId: store.id,
           status: 'ACTIVE',
-          OR: [
-            { shopifyProductId: productId },
-            { shopifyProductId: `gid://shopify/Product/${productId}` },
-          ],
+          shopifyProductId: { in: productIdCandidates },
         },
         select: { id: true },
       });
+
+      // If not found as ACTIVE, check if it exists but is DRAFT/ARCHIVED
+      if (!family) {
+        const inactive = await db.productFamily.findFirst({
+          where: {
+            storeId: store.id,
+            shopifyProductId: { in: productIdCandidates },
+          },
+          select: { id: true, status: true, name: true },
+        });
+        if (inactive) {
+          debug.familyFoundInactive = true;
+          console.warn('[storefront/configurator] Family found but not ACTIVE:', inactive.name, inactive.status);
+          return Response.json(
+            {
+              error: 'FAMILY_NOT_ACTIVE',
+              message: `Product family "${inactive.name}" exists but has status "${inactive.status}". Set it to ACTIVE in the admin to display the configurator.`,
+              debug,
+            },
+            { status: 404, headers: corsHeaders() }
+          );
+        }
+      }
     }
 
     if (!family && handle) {
@@ -89,23 +136,47 @@ export async function GET(request: NextRequest) {
         where: {
           storeId: store.id,
           status: 'ACTIVE',
-          OR: [
-            { handle },
-            { slug: handle },
-          ],
+          OR: [{ handle }, { slug: handle }],
         },
         select: { id: true },
       });
+
+      // Same inactive check for handle lookup
+      if (!family) {
+        const inactive = await db.productFamily.findFirst({
+          where: {
+            storeId: store.id,
+            OR: [{ handle }, { slug: handle }],
+          },
+          select: { id: true, status: true, name: true },
+        });
+        if (inactive) {
+          debug.familyFoundInactive = true;
+          return Response.json(
+            {
+              error: 'FAMILY_NOT_ACTIVE',
+              message: `Product family "${inactive.name}" exists but has status "${inactive.status}". Set it to ACTIVE.`,
+              debug,
+            },
+            { status: 404, headers: corsHeaders() }
+          );
+        }
+      }
     }
 
     if (!family) {
+      console.warn('[storefront/configurator] No family found', debug);
       return Response.json(
-        { error: 'No configurator found for this product' },
+        {
+          error: 'PRODUCT_FAMILY_NOT_FOUND',
+          message: 'No configurator found for this product. Check that the product family is linked to this Shopify product and set to ACTIVE.',
+          debug,
+        },
         { status: 404, headers: corsHeaders() }
       );
     }
 
-    // Load full configurator data — customer-safe fields only
+    // ── Load full configurator data ──
     const fullFamily = await db.productFamily.findUnique({
       where: { id: family.id },
       select: {
@@ -160,8 +231,8 @@ export async function GET(request: NextRequest) {
 
     if (!fullFamily) {
       return Response.json(
-        { error: 'Configurator data not found' },
-        { status: 404, headers: corsHeaders() }
+        { error: 'LOAD_FAILED', message: 'Configurator data could not be loaded', debug },
+        { status: 500, headers: corsHeaders() }
       );
     }
 
@@ -171,9 +242,9 @@ export async function GET(request: NextRequest) {
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    console.error('[storefront/configurator]', message, error);
+    console.error('[storefront/configurator] Error:', message, error);
     return Response.json(
-      { error: 'Failed to load configurator' },
+      { error: 'INTERNAL_ERROR', message: 'Failed to load configurator', debug },
       { status: 500, headers: corsHeaders() }
     );
   }

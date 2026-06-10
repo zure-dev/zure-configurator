@@ -2,17 +2,21 @@
 
 client_id = "7b661fd6175d8c5edf83eb994f738690"
 name = "zure configurator"
-application_url = "https://example.com"
+application_url = "https://zure-configurator-widget.vercel.app"
 embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
 
 [webhooks]
 api_version = "2026-01"
 
 [access_scopes]
-# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = ""
-optional_scopes = [ ]
+scopes = "read_products,write_products,read_orders,write_orders,read_customers"
+optional_scopes = []
 use_legacy_install_flow = false
 
 [auth]
-redirect_urls = [ ]
+redirect_urls = [
+  "https://zure-configurator-widget.vercel.app/api/auth/callback"
+]

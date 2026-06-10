@@ -1,18 +1,18 @@
-name = "Variant King"
+name = "Zure Configurator"
 client_id = ""
-application_url = "https://example.com"
+application_url = "https://zure-configurator-widget.vercel.app"
 embedded = true
-handle = "variant-king"
+handle = "zure-configurator"
 
 [build]
 automatically_update_urls_on_dev = true
 
 [access_scopes]
-scopes = "read_products,write_products,read_orders,read_customers"
+scopes = "read_products,write_products,read_orders,write_orders,read_customers"
 
 [auth]
 redirect_urls = [
-  "https://example.com/api/auth/callback"
+  "https://zure-configurator-widget.vercel.app/api/auth/callback"
 ]
 
 [webhooks]
