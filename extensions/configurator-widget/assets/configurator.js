@@ -1,3 +1,4 @@
+// v2.0.0
 /**
  * Zure Configurator — Storefront Renderer
  * Vanilla JS, no dependencies. Runs in any Shopify theme.
@@ -354,3 +355,4 @@
   }
 
 })();
+

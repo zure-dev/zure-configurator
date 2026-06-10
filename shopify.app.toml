@@ -24,3 +24,8 @@ uri = "/api/webhooks"
 
 [pos]
 embedded = false
+
+[app_proxy]
+url = "https://zure-configurator-widget.vercel.app/api/storefront/proxy"
+subpath = "configurator"
+prefix = "apps"
