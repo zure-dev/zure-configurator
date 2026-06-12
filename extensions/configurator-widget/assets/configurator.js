@@ -1,10 +1,4 @@
-// v2.0.0
-/**
- * Zure Configurator — Storefront Renderer
- * Vanilla JS, no dependencies. Runs in any Shopify theme.
- * Container: #zure-configurator-root
- * Emits: zure:price-update, zure:cart-add custom events
- */
+// v3.0.0 — Fixed container ID, App Proxy, timeout, error handling
 (function () {
   'use strict';
 
@@ -14,27 +8,15 @@
   var shopDomain = container.dataset.shop || '';
   var productId = container.dataset.productId || '';
   var productHandle = container.dataset.productHandle || '';
+  var proxyPath = container.dataset.proxyPath || '';
   var appUrl = (container.dataset.appUrl || '').replace(/\/$/, '');
   var currency = container.dataset.currency || 'AUD';
+  var TIMEOUT_MS = 10000;
 
-  // ── Validate config ──
-  if (!appUrl) {
-    container.innerHTML = '<div class="zure-cfg-error">Configurator app URL is not configured. Edit the app block settings in the theme editor.</div>';
-    console.error('[ZureConfigurator] Missing app URL. data-app-url is empty.');
-    return;
-  }
-
-  if (!shopDomain) {
-    container.innerHTML = '<div class="zure-cfg-error">Shop domain not detected.</div>';
-    console.error('[ZureConfigurator] Missing shop domain. data-shop is empty.');
-    return;
-  }
-
-  if (!productId && !productHandle) {
-    container.innerHTML = '<div class="zure-cfg-error">No product detected on this page.</div>';
-    console.error('[ZureConfigurator] No product ID or handle found.');
-    return;
-  }
+  // ── Validate ──
+  if (!shopDomain) { showError('Shop domain not detected.'); return; }
+  if (!productId && !productHandle) { showError('No product detected on this page.'); return; }
+  if (!proxyPath && !appUrl) { showError('Configurator not configured. Set up App Proxy or enter the App URL in block settings.'); return; }
 
   // ── State ──
   var configurator = null;
@@ -46,57 +28,91 @@
   params.set('shop', shopDomain);
   if (productId) params.set('productId', productId);
   if (productHandle) params.set('handle', productHandle);
-  var fetchUrl = appUrl + '/api/storefront/configurator?' + params.toString();
 
-  console.log('[ZureConfigurator] Fetching:', fetchUrl);
+  var primaryUrl = '';
+  var fallbackUrl = '';
 
-  // ── Fetch data ──
-  fetch(fetchUrl)
-    .then(function (res) {
-      console.log('[ZureConfigurator] Response status:', res.status);
-      return res.json().then(function (data) {
-        return { status: res.status, ok: res.ok, data: data };
-      });
-    })
-    .then(function (result) {
-      if (!result.ok || result.data.error) {
-        var errCode = result.data.error || 'UNKNOWN';
-        var errMsg = result.data.message || 'Unknown error';
+  if (proxyPath) {
+    primaryUrl = proxyPath + '?' + params.toString();
+    if (appUrl) fallbackUrl = appUrl + '/api/storefront/configurator?' + params.toString();
+  } else {
+    primaryUrl = appUrl + '/api/storefront/configurator?' + params.toString();
+  }
 
-        console.error('[ZureConfigurator] API error:', errCode, errMsg);
-        if (result.data.debug) {
-          console.error('[ZureConfigurator] Debug:', JSON.stringify(result.data.debug, null, 2));
-        }
+  console.log('[ZureConfigurator] Primary URL:', primaryUrl);
+  if (fallbackUrl) console.log('[ZureConfigurator] Fallback URL:', fallbackUrl);
 
-        // Show customer-appropriate message
-        var displayMsg = 'Configurator could not be loaded.';
-        if (errCode === 'PRODUCT_FAMILY_NOT_FOUND') {
-          displayMsg = 'No configurator is available for this product.';
-        } else if (errCode === 'FAMILY_NOT_ACTIVE') {
-          displayMsg = 'This product configurator is not yet published.';
-        } else if (errCode === 'STORE_NOT_FOUND') {
-          displayMsg = 'Configurator is not connected to this store.';
-        } else if (errCode === 'MISSING_SHOP' || errCode === 'MISSING_PRODUCT') {
-          displayMsg = 'Configurator configuration error. Check app block settings.';
-        }
+  // ── Fetch with timeout ──
+  function fetchWithTimeout(url, timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      var timer = setTimeout(function () { reject(new Error('Request timed out after ' + timeoutMs + 'ms')); }, timeoutMs);
+      fetch(url)
+        .then(function (res) { clearTimeout(timer); resolve(res); })
+        .catch(function (err) { clearTimeout(timer); reject(err); });
+    });
+  }
 
-        container.innerHTML = '<div class="zure-cfg-error">' + escapeHtml(displayMsg) + '</div>';
-        return;
-      }
+  function handleResponse(res) {
+    console.log('[ZureConfigurator] Response status:', res.status);
+    return res.json().then(function (data) { return { ok: res.ok, data: data }; });
+  }
 
-      configurator = result.data.configurator;
-      priceRules = configurator.priceRules || [];
-      console.log('[ZureConfigurator] Loaded:', configurator.name, '— groups:', (configurator.optionGroups || []).length);
-      initDefaults();
-      render();
-    })
+  function processData(result) {
+    if (!result.ok || result.data.error) {
+      var errCode = result.data.error || 'UNKNOWN';
+      var errMsg = result.data.message || 'Unknown error';
+      console.error('[ZureConfigurator] API error:', errCode, errMsg);
+      if (result.data.debug) console.error('[ZureConfigurator] Debug:', JSON.stringify(result.data.debug, null, 2));
+
+      var displayMsg = 'Configurator could not be loaded.';
+      if (errCode === 'PRODUCT_FAMILY_NOT_FOUND') displayMsg = 'No configurator is available for this product.';
+      else if (errCode === 'FAMILY_NOT_ACTIVE') displayMsg = 'This product configurator is not yet published.';
+      else if (errCode === 'STORE_NOT_FOUND') displayMsg = 'Configurator is not connected to this store.';
+      showError(displayMsg);
+      return;
+    }
+
+    if (!result.data.configurator || !result.data.configurator.optionGroups) {
+      console.error('[ZureConfigurator] Invalid response: missing configurator or optionGroups');
+      showError('Configurator data is incomplete.');
+      return;
+    }
+
+    configurator = result.data.configurator;
+    priceRules = configurator.priceRules || [];
+    console.log('[ZureConfigurator] Loaded:', configurator.name, '—', (configurator.optionGroups || []).length, 'groups');
+    initDefaults();
+    render();
+  }
+
+  // ── Primary fetch ──
+  fetchWithTimeout(primaryUrl, TIMEOUT_MS)
+    .then(handleResponse)
+    .then(processData)
     .catch(function (err) {
-      console.error('[ZureConfigurator] Network/fetch error:', err);
-      console.error('[ZureConfigurator] Attempted URL:', fetchUrl);
-      container.innerHTML = '<div class="zure-cfg-error">Could not connect to configurator service. Please try again later.</div>';
+      console.error('[ZureConfigurator] Primary fetch failed:', err.message, '— URL:', primaryUrl);
+
+      if (fallbackUrl) {
+        console.log('[ZureConfigurator] Trying fallback...');
+        fetchWithTimeout(fallbackUrl, TIMEOUT_MS)
+          .then(handleResponse)
+          .then(processData)
+          .catch(function (err2) {
+            console.error('[ZureConfigurator] Fallback also failed:', err2.message);
+            showError('Could not connect to configurator service.');
+          });
+      } else {
+        showError('Could not connect to configurator service.');
+      }
     });
 
-  // ── Init default selections ──
+  // ── Show error (always replaces loading UI) ──
+  function showError(msg) {
+    console.error('[ZureConfigurator]', msg);
+    container.innerHTML = '<div class="zure-cfg-error">' + escapeHtml(msg) + '</div>';
+  }
+
+  // ── Init defaults ──
   function initDefaults() {
     var groups = configurator.optionGroups || [];
     for (var i = 0; i < groups.length; i++) {
@@ -114,245 +130,153 @@
   // ── Conditional visibility ──
   function evaluateVisibility(conditions) {
     if (!conditions || !Array.isArray(conditions) || conditions.length === 0) return true;
-
-    var segments = [];
-    var current = [];
-
+    var segments = [], current = [];
     for (var i = 0; i < conditions.length; i++) {
       var cond = conditions[i];
       current.push(cond);
       if (cond.connector === 'OR' || cond.connector === null || cond.connector === undefined) {
-        segments.push(current);
-        current = [];
+        segments.push(current); current = [];
       }
     }
     if (current.length > 0) segments.push(current);
-
     for (var s = 0; s < segments.length; s++) {
-      var segment = segments[s];
-      var allPass = true;
-      for (var c = 0; c < segment.length; c++) {
-        var rule = segment[c];
-        var selected = selections[rule.sourceGroupSlug];
+      var seg = segments[s], allPass = true;
+      for (var c = 0; c < seg.length; c++) {
+        var rule = seg[c], selected = selections[rule.sourceGroupSlug];
         if (rule.operator === 'equals' && selected !== rule.sourceValueSlug) { allPass = false; break; }
         if (rule.operator === 'not_equals' && selected === rule.sourceValueSlug) { allPass = false; break; }
       }
       if (allPass) return true;
     }
-
     return false;
   }
 
-  // ── Price calculation ──
+  // ── Price ──
   function calculatePrice() {
-    var base = parseFloat(configurator.basePrice) || 0;
-    var total = base;
-
+    var base = parseFloat(configurator.basePrice) || 0, total = base;
     for (var i = 0; i < priceRules.length; i++) {
       var rule = priceRules[i];
-      var selectedValue = selections[rule.optionGroupSlug];
-      if (selectedValue !== rule.optionValueSlug) continue;
-
+      if (selections[rule.optionGroupSlug] !== rule.optionValueSlug) continue;
       var mod = parseFloat(rule.priceModifier) || 0;
       if (rule.modifierType === 'ADDITIVE') total += mod;
       else if (rule.modifierType === 'PERCENTAGE') total += base * (mod / 100);
       else if (rule.modifierType === 'ABSOLUTE' || rule.modifierType === 'OVERRIDE') total = mod;
     }
-
     return total;
   }
 
-  function getPriceModifier(groupSlug, valueSlug) {
+  function getPriceMod(gs, vs) {
     for (var i = 0; i < priceRules.length; i++) {
-      var rule = priceRules[i];
-      if (rule.optionGroupSlug === groupSlug && rule.optionValueSlug === valueSlug) {
-        var mod = parseFloat(rule.priceModifier) || 0;
-        if (rule.modifierType === 'ADDITIVE' && mod !== 0) {
-          return (mod > 0 ? '+' : '') + formatCurrency(mod);
-        }
+      var r = priceRules[i];
+      if (r.optionGroupSlug === gs && r.optionValueSlug === vs) {
+        var m = parseFloat(r.priceModifier) || 0;
+        if (r.modifierType === 'ADDITIVE' && m !== 0) return (m > 0 ? '+' : '') + fmt(m);
       }
     }
     return null;
   }
 
-  function formatCurrency(amount) {
-    return '$' + Math.abs(amount).toFixed(2);
-  }
+  function fmt(a) { return '$' + Math.abs(a).toFixed(2); }
 
   function emitPriceUpdate() {
-    var totalPrice = calculatePrice();
-    document.dispatchEvent(new CustomEvent('zure:price-update', {
-      detail: { price: totalPrice, compareAt: null }
-    }));
+    document.dispatchEvent(new CustomEvent('zure:price-update', { detail: { price: calculatePrice(), compareAt: null } }));
   }
 
-  // ── Select handler ──
-  function selectValue(groupSlug, valueSlug) {
-    selections[groupSlug] = valueSlug;
-    render();
-    emitPriceUpdate();
-  }
+  function selectValue(gs, vs) { selections[gs] = vs; render(); emitPriceUpdate(); }
 
   // ── Render ──
   function render() {
     if (!configurator) return;
-
-    var groups = configurator.optionGroups || [];
-    var html = '';
+    var groups = configurator.optionGroups || [], html = '';
 
     for (var i = 0; i < groups.length; i++) {
-      var group = groups[i];
-      var visible = !group.isConditional || evaluateVisibility(group.visibilityConditions);
-      var hiddenClass = visible ? '' : ' zure-cfg-hidden';
-
-      html += '<div class="zure-cfg-group' + hiddenClass + '" data-group="' + escapeAttr(group.slug) + '">';
-      html += '<div class="zure-cfg-group-header">';
-      html += '<span class="zure-cfg-group-name">' + escapeHtml(group.name) + '</span>';
-      if (group.isRequired) html += '<span class="zure-cfg-required">*</span>';
+      var g = groups[i];
+      var vis = !g.isConditional || evaluateVisibility(g.visibilityConditions);
+      html += '<div class="zure-cfg-group' + (vis ? '' : ' zure-cfg-hidden') + '" data-group="' + ea(g.slug) + '">';
+      html += '<div class="zure-cfg-group-header"><span class="zure-cfg-group-name">' + eh(g.name) + '</span>';
+      if (g.isRequired) html += '<span class="zure-cfg-required">*</span>';
       html += '</div>';
+      if (g.helperText) html += '<div class="zure-cfg-helper">' + eh(g.helperText) + '</div>';
 
-      if (group.helperText) {
-        html += '<div class="zure-cfg-helper">' + escapeHtml(group.helperText) + '</div>';
-      }
-
-      var values = group.values || [];
-      var displayType = group.displayType || 'TILE';
-
-      if (displayType === 'DROPDOWN') {
-        html += renderDropdown(group, values);
+      var vals = g.values || [], dt = g.displayType || 'TILE';
+      if (dt === 'DROPDOWN') {
+        html += renderDD(g, vals);
       } else {
         html += '<div class="zure-cfg-values">';
-        for (var j = 0; j < values.length; j++) {
-          html += renderValue(group, values[j], displayType);
-        }
+        for (var j = 0; j < vals.length; j++) html += renderVal(g, vals[j], dt);
         html += '</div>';
       }
-
       html += '</div>';
     }
 
-    var totalPrice = calculatePrice();
-    if (totalPrice > 0) {
-      html += '<div class="zure-cfg-price-summary">';
-      html += '<span class="zure-cfg-price-label">Configured Price</span>';
-      html += '<span class="zure-cfg-price-value">' + formatCurrency(totalPrice) + '</span>';
-      html += '</div>';
+    var tp = calculatePrice();
+    if (tp > 0) {
+      html += '<div class="zure-cfg-price-summary"><span class="zure-cfg-price-label">Configured Price</span>';
+      html += '<span class="zure-cfg-price-value">' + fmt(tp) + '</span></div>';
     }
-
     html += '<button class="zure-cfg-cta" id="zure-cfg-add-to-cart">Add Configured Product</button>';
     html += '<div id="zure-cfg-status" class="zure-cfg-status" style="display:none;"></div>';
 
     container.innerHTML = html;
-    bindEvents();
+    bind();
     emitPriceUpdate();
   }
 
-  function renderValue(group, value, displayType) {
-    var selected = selections[group.slug] === value.slug;
-    var priceMod = getPriceModifier(group.slug, value.slug);
-    var extraClass = '';
-    var inner = '';
-
-    if (displayType === 'SWATCH' && value.swatchColor) {
-      extraClass = ' zure-cfg-swatch';
-      inner += '<div class="zure-cfg-swatch-circle" style="background:' + escapeAttr(value.swatchColor) + ';"></div>';
-      inner += '<span class="zure-cfg-value-label">' + escapeHtml(value.name) + '</span>';
-    } else if ((displayType === 'THUMBNAIL' || displayType === 'TILE') && value.thumbnailUrl) {
-      extraClass = ' zure-cfg-image';
-      inner += '<img class="zure-cfg-image-thumb" src="' + escapeAttr(value.thumbnailUrl) + '" alt="' + escapeAttr(value.name) + '" loading="lazy" />';
-      inner += '<span class="zure-cfg-value-label">' + escapeHtml(value.name) + '</span>';
+  function renderVal(g, v, dt) {
+    var sel = selections[g.slug] === v.slug, pm = getPriceMod(g.slug, v.slug), ec = '', inner = '';
+    if (dt === 'SWATCH' && v.swatchColor) {
+      ec = ' zure-cfg-swatch';
+      inner += '<div class="zure-cfg-swatch-circle" style="background:' + ea(v.swatchColor) + ';"></div>';
+      inner += '<span class="zure-cfg-value-label">' + eh(v.name) + '</span>';
+    } else if ((dt === 'THUMBNAIL' || dt === 'TILE') && v.thumbnailUrl) {
+      ec = ' zure-cfg-image';
+      inner += '<img class="zure-cfg-image-thumb" src="' + ea(v.thumbnailUrl) + '" alt="' + ea(v.name) + '" loading="lazy"/>';
+      inner += '<span class="zure-cfg-value-label">' + eh(v.name) + '</span>';
     } else {
-      inner += '<span class="zure-cfg-value-label">' + escapeHtml(value.name) + '</span>';
+      inner += '<span class="zure-cfg-value-label">' + eh(v.name) + '</span>';
     }
-
-    if (priceMod) {
-      inner += '<span class="zure-cfg-price-mod">' + escapeHtml(priceMod) + '</span>';
-    }
-
-    return '<div class="zure-cfg-value' + extraClass + '"'
-      + ' data-selected="' + (selected ? 'true' : 'false') + '"'
-      + ' data-group-slug="' + escapeAttr(group.slug) + '"'
-      + ' data-value-slug="' + escapeAttr(value.slug) + '"'
-      + ' role="button" tabindex="0"'
-      + ' aria-pressed="' + (selected ? 'true' : 'false') + '"'
-      + '>' + inner + '</div>';
+    if (pm) inner += '<span class="zure-cfg-price-mod">' + eh(pm) + '</span>';
+    return '<div class="zure-cfg-value' + ec + '" data-selected="' + sel + '" data-group-slug="' + ea(g.slug) + '" data-value-slug="' + ea(v.slug) + '" role="button" tabindex="0" aria-pressed="' + sel + '">' + inner + '</div>';
   }
 
-  function renderDropdown(group, values) {
-    var selected = selections[group.slug] || '';
-    var html = '<select class="zure-cfg-dropdown" data-group-slug="' + escapeAttr(group.slug) + '">';
-    html += '<option value="">— Select —</option>';
-    for (var i = 0; i < values.length; i++) {
-      var val = values[i];
-      var priceMod = getPriceModifier(group.slug, val.slug);
-      var label = val.name + (priceMod ? ' (' + priceMod + ')' : '');
-      var isSelected = selected === val.slug ? ' selected' : '';
-      html += '<option value="' + escapeAttr(val.slug) + '"' + isSelected + '>' + escapeHtml(label) + '</option>';
+  function renderDD(g, vals) {
+    var s = selections[g.slug] || '';
+    var h = '<select class="zure-cfg-dropdown" data-group-slug="' + ea(g.slug) + '"><option value="">— Select —</option>';
+    for (var i = 0; i < vals.length; i++) {
+      var v = vals[i], pm = getPriceMod(g.slug, v.slug);
+      h += '<option value="' + ea(v.slug) + '"' + (s === v.slug ? ' selected' : '') + '>' + eh(v.name + (pm ? ' (' + pm + ')' : '')) + '</option>';
     }
-    html += '</select>';
-    return html;
+    return h + '</select>';
   }
 
-  function bindEvents() {
-    var valueEls = container.querySelectorAll('.zure-cfg-value');
-    for (var i = 0; i < valueEls.length; i++) {
-      valueEls[i].addEventListener('click', handleValueClick);
-      valueEls[i].addEventListener('keydown', handleValueKeydown);
+  function bind() {
+    var els = container.querySelectorAll('.zure-cfg-value');
+    for (var i = 0; i < els.length; i++) {
+      els[i].addEventListener('click', onValClick);
+      els[i].addEventListener('keydown', onValKey);
     }
-    var dropdowns = container.querySelectorAll('.zure-cfg-dropdown');
-    for (var j = 0; j < dropdowns.length; j++) {
-      dropdowns[j].addEventListener('change', handleDropdownChange);
-    }
+    var dds = container.querySelectorAll('.zure-cfg-dropdown');
+    for (var j = 0; j < dds.length; j++) dds[j].addEventListener('change', onDD);
     var cta = document.getElementById('zure-cfg-add-to-cart');
-    if (cta) cta.addEventListener('click', handleAddToCart);
+    if (cta) cta.addEventListener('click', onCTA);
   }
 
-  function handleValueClick(e) {
-    var el = e.currentTarget;
-    var groupSlug = el.dataset.groupSlug;
-    var valueSlug = el.dataset.valueSlug;
-    if (groupSlug && valueSlug) selectValue(groupSlug, valueSlug);
+  function onValClick(e) {
+    var el = e.currentTarget, gs = el.dataset.groupSlug, vs = el.dataset.valueSlug;
+    if (gs && vs) selectValue(gs, vs);
   }
-
-  function handleValueKeydown(e) {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      handleValueClick(e);
-    }
-  }
-
-  function handleDropdownChange(e) {
-    var el = e.currentTarget;
-    var groupSlug = el.dataset.groupSlug;
-    if (groupSlug) selectValue(groupSlug, el.value);
-  }
-
-  function handleAddToCart() {
-    var statusEl = document.getElementById('zure-cfg-status');
-    if (statusEl) {
-      statusEl.style.display = 'block';
-      statusEl.textContent = 'Configuration captured. Cart integration coming next.';
-    }
-    var cta = document.getElementById('zure-cfg-add-to-cart');
-    if (cta) cta.disabled = true;
-
-    document.dispatchEvent(new CustomEvent('zure:cart-add', {
-      detail: { selections: selections, price: calculatePrice() }
-    }));
-
+  function onValKey(e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onValClick(e); } }
+  function onDD(e) { var el = e.currentTarget, gs = el.dataset.groupSlug; if (gs) selectValue(gs, el.value); }
+  function onCTA() {
+    var st = document.getElementById('zure-cfg-status');
+    if (st) { st.style.display = 'block'; st.textContent = 'Configuration captured. Cart integration coming next.'; }
+    var btn = document.getElementById('zure-cfg-add-to-cart');
+    if (btn) btn.disabled = true;
+    document.dispatchEvent(new CustomEvent('zure:cart-add', { detail: { selections: selections, price: calculatePrice() } }));
     console.log('[ZureConfigurator] Selections:', JSON.stringify(selections));
-    console.log('[ZureConfigurator] Total price:', calculatePrice());
   }
 
-  function escapeHtml(str) {
-    if (!str) return '';
-    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
-
-  function escapeAttr(str) {
-    if (!str) return '';
-    return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
+  function eh(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : ''; }
+  function ea(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;') : ''; }
 
 })();
-

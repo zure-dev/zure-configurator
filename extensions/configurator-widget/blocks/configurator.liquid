@@ -1,44 +1,83 @@
 {% comment %}
   Zure Configurator — Theme App Extension Block
-  Add this block to a product page in the Shopify theme editor.
-  It renders the customer-facing product configurator.
+  Drop this into any product page template via the theme editor.
 {% endcomment %}
 
 {% if product %}
   <div
-    id="zure-configurator"
-    data-shop="{{ shop.permanent_domain }}"
+    id="zure-configurator-root"
     data-product-id="{{ product.id }}"
     data-product-handle="{{ product.handle }}"
+    data-shop="{{ shop.permanent_domain }}"
     data-app-url="{{ block.settings.app_url }}"
+    data-proxy-path="/apps/configurator"
     data-currency="{{ shop.currency }}"
-    style="margin: 24px 0;"
+    style="min-height: 200px;"
   >
     <div class="zure-cfg-loading">
       <div class="zure-cfg-spinner"></div>
       <p>Loading configurator...</p>
     </div>
+    <noscript>
+      <p style="padding: 20px; text-align: center; color: #6f6f6f;">
+        JavaScript is required to use the product configurator.
+      </p>
+    </noscript>
   </div>
+
+  {% if block.settings.hide_native_options %}
+    <style>
+      .product-form__input--variant,
+      .product-form__variants,
+      [data-variant-selects],
+      .variant-selects,
+      .product__variant-picker { display: none !important; }
+    </style>
+  {% endif %}
 
   {{ 'configurator.css' | asset_url | stylesheet_tag }}
   <script src="{{ 'configurator.js' | asset_url }}" defer></script>
-{% else %}
-  <p style="padding: 16px; color: #888; font-size: 14px;">
-    Zure Configurator: This block must be placed on a product page.
-  </p>
+
+  <script>
+    (function() {
+      document.addEventListener('zure:price-update', function(e) {
+        var priceEl = document.querySelector('[data-product-price], .product__price .price-item--regular');
+        if (priceEl && e.detail && e.detail.price != null) {
+          priceEl.textContent = '$' + Number(e.detail.price).toFixed(2);
+        }
+      });
+      document.addEventListener('zure:cart-add', function() {
+        if (typeof window.Shopify !== 'undefined') {
+          fetch('/cart.js').then(function(r){return r.json();}).then(function(cart) {
+            var countEl = document.querySelector('[data-cart-count], .cart-count');
+            if (countEl) countEl.textContent = cart.item_count;
+          });
+        }
+      });
+    })();
+  </script>
 {% endif %}
 
 {% schema %}
 {
   "name": "Zure Configurator",
   "target": "section",
+  "enabled_on": {
+    "templates": ["product"]
+  },
   "settings": [
     {
       "type": "text",
       "id": "app_url",
-      "label": "Configurator App URL",
-      "info": "Your Zure Configurator app URL, e.g. https://zure-configurator-widget.vercel.app",
-      "default": "https://zure-configurator-widget.vercel.app"
+      "label": "Configurator App URL (fallback)",
+      "info": "Only needed if App Proxy is not set up. Usually leave blank.",
+      "default": ""
+    },
+    {
+      "type": "checkbox",
+      "id": "hide_native_options",
+      "label": "Hide native variant selectors",
+      "default": true
     },
     {
       "type": "checkbox",
