@@ -8,8 +8,21 @@ export const dynamic = 'force-dynamic';
 // ──────────────────────────────────────────────
 // POST /api/options/paste
 // Body: { clipboardId, productFamilyId }
-// Creates a new option group from clipboard data.
+// Creates group + values + product mappings from clipboard.
 // ──────────────────────────────────────────────
+
+interface ClipboardMapping {
+  shopifyProductId: string;
+  shopifyVariantId: string | null;
+  shopifyProductTitle: string | null;
+  shopifyVariantTitle: string | null;
+  shopifySku: string | null;
+  shopifyImageUrl: string | null;
+  shopifyPrice: string | null;
+  quantity: number;
+  sortOrder: number;
+  role: string | null;
+}
 
 interface ClipboardValue {
   name: string;
@@ -28,6 +41,7 @@ interface ClipboardValue {
   shopifySku: string | null;
   shopifyImageUrl: string | null;
   shopifyPrice: string | null;
+  productMappings?: ClipboardMapping[];
 }
 
 interface ClipboardData {
@@ -55,38 +69,24 @@ export async function POST(request: NextRequest) {
       return tenantError('clipboardId and productFamilyId are required', 400);
     }
 
-    // Load clipboard entry
-    const entry = await db.optionGroupClipboard.findUnique({
-      where: { id: clipboardId },
-    });
-
+    const entry = await db.optionGroupClipboard.findUnique({ where: { id: clipboardId } });
     if (!entry) return tenantError('Clipboard entry not found', 404);
     if (entry.storeId !== tenant.storeId) return tenantError('Clipboard entry not found', 404);
+    if (entry.expiresAt && entry.expiresAt < new Date()) return tenantError('Clipboard entry has expired', 410);
 
-    // Check expiry
-    if (entry.expiresAt && entry.expiresAt < new Date()) {
-      return tenantError('Clipboard entry has expired', 410);
-    }
-
-    // Verify target family belongs to same store
     const family = await db.productFamily.findFirst({
       where: { id: productFamilyId, storeId: tenant.storeId },
       select: { id: true },
     });
-
     if (!family) return tenantError('Target product family not found', 404);
 
-    // Parse clipboard data
     const data = entry.data as unknown as ClipboardData;
-    if (!data || !data.name) {
-      return tenantError('Invalid clipboard data', 400);
-    }
+    if (!data || !data.name) return tenantError('Invalid clipboard data', 400);
 
-    // Generate collision-safe slug
+    // Collision-safe slug
     const baseSlug = data.slug;
     let newSlug = baseSlug;
     let suffix = 0;
-
     while (true) {
       const existing = await db.optionGroup.findFirst({
         where: { productFamilyId, slug: newSlug },
@@ -97,10 +97,8 @@ export async function POST(request: NextRequest) {
       newSlug = suffix === 1 ? `${baseSlug}-copy` : `${baseSlug}-copy-${suffix}`;
     }
 
-    // Determine name (add "Copy" if slug was changed, i.e. collision occurred)
     const newName = suffix > 0 ? `${data.name} (Pasted)` : data.name;
 
-    // Get next sort order
     const maxSort = await db.optionGroup.findFirst({
       where: { productFamilyId },
       orderBy: { sortOrder: 'desc' },
@@ -108,7 +106,6 @@ export async function POST(request: NextRequest) {
     });
     const nextSortOrder = (maxSort?.sortOrder ?? -1) + 1;
 
-    // Create in transaction
     const values = Array.isArray(data.values) ? data.values : [];
 
     const created = await db.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -130,7 +127,7 @@ export async function POST(request: NextRequest) {
       });
 
       for (const val of values) {
-        await tx.optionValue.create({
+        const newVal = await tx.optionValue.create({
           data: {
             optionGroupId: newGroup.id,
             name: val.name,
@@ -153,11 +150,37 @@ export async function POST(request: NextRequest) {
             shopifyPrice: val.shopifyPrice != null ? parseFloat(val.shopifyPrice) : null,
           },
         });
+
+        // Copy product mappings
+        const mappings = Array.isArray(val.productMappings) ? val.productMappings : [];
+        for (const m of mappings) {
+          if (!m.shopifyProductId) continue;
+          await tx.optionValueProductMapping.create({
+            data: {
+              optionValueId: newVal.id,
+              shopifyProductId: m.shopifyProductId,
+              shopifyVariantId: m.shopifyVariantId ?? null,
+              shopifyProductTitle: m.shopifyProductTitle ?? null,
+              shopifyVariantTitle: m.shopifyVariantTitle ?? null,
+              shopifySku: m.shopifySku ?? null,
+              shopifyImageUrl: m.shopifyImageUrl ?? null,
+              shopifyPrice: m.shopifyPrice != null ? parseFloat(m.shopifyPrice) : null,
+              quantity: m.quantity ?? 1,
+              sortOrder: m.sortOrder ?? 0,
+              role: m.role ?? null,
+            },
+          });
+        }
       }
 
       return tx.optionGroup.findUnique({
         where: { id: newGroup.id },
-        include: { values: { orderBy: { sortOrder: 'asc' } } },
+        include: {
+          values: {
+            orderBy: { sortOrder: 'asc' },
+            include: { productMappings: { orderBy: { sortOrder: 'asc' } } },
+          },
+        },
       });
     });
 

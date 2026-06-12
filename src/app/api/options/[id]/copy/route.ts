@@ -6,8 +6,7 @@ export const dynamic = 'force-dynamic';
 
 // ──────────────────────────────────────────────
 // POST /api/options/[id]/copy
-// Copies an option group into the server-side clipboard.
-// Replaces any existing clipboard entry for this store.
+// Copies an option group + values + mappings to clipboard.
 // ──────────────────────────────────────────────
 
 export async function POST(
@@ -18,11 +17,13 @@ export async function POST(
     const tenant = await getTenantFromSession(request);
     if (!tenant) return tenantError('Unauthorized', 401);
 
-    // Load group + values
     const group = await db.optionGroup.findUnique({
       where: { id: params.id },
       include: {
-        values: { orderBy: { sortOrder: 'asc' } },
+        values: {
+          orderBy: { sortOrder: 'asc' },
+          include: { productMappings: { orderBy: { sortOrder: 'asc' } } },
+        },
         productFamily: { select: { id: true, name: true, storeId: true } },
       },
     });
@@ -30,7 +31,7 @@ export async function POST(
     if (!group) return tenantError('Option group not found', 404);
     if (group.productFamily.storeId !== tenant.storeId) return tenantError('Option group not found', 404);
 
-    // Serialize snapshot
+    // Serialize snapshot including mappings
     const snapshot = {
       name: group.name,
       slug: group.slug,
@@ -58,15 +59,26 @@ export async function POST(
         shopifySku: v.shopifySku,
         shopifyImageUrl: v.shopifyImageUrl,
         shopifyPrice: v.shopifyPrice != null ? String(v.shopifyPrice) : null,
+        productMappings: (v.productMappings || []).map((m: any) => ({
+          shopifyProductId: m.shopifyProductId,
+          shopifyVariantId: m.shopifyVariantId,
+          shopifyProductTitle: m.shopifyProductTitle,
+          shopifyVariantTitle: m.shopifyVariantTitle,
+          shopifySku: m.shopifySku,
+          shopifyImageUrl: m.shopifyImageUrl,
+          shopifyPrice: m.shopifyPrice != null ? String(m.shopifyPrice) : null,
+          quantity: m.quantity,
+          sortOrder: m.sortOrder,
+          role: m.role,
+        })),
       })),
     };
 
-    // Delete existing clipboard entries for this store (keep only latest)
+    // Replace existing clipboard
     await db.optionGroupClipboard.deleteMany({
       where: { storeId: tenant.storeId, isTemplate: false },
     });
 
-    // Create clipboard entry (expires in 24h)
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     const clipboard = await db.optionGroupClipboard.create({
