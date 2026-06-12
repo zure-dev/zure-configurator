@@ -72,6 +72,33 @@ interface ShopifyProductWithVariants {
   variants: ShopifyVariant[];
 }
 
+interface ProductMapping {
+  id: string;
+  optionValueId: string;
+  shopifyProductId: string;
+  shopifyVariantId: string | null;
+  shopifyProductTitle: string | null;
+  shopifyVariantTitle: string | null;
+  shopifySku: string | null;
+  shopifyImageUrl: string | null;
+  shopifyPrice: string | null;
+  quantity: number;
+  sortOrder: number;
+  role: string | null;
+}
+
+interface PendingMapping {
+  shopifyProductId: string;
+  shopifyVariantId: string | null;
+  shopifyProductTitle: string | null;
+  shopifyVariantTitle: string | null;
+  shopifySku: string | null;
+  shopifyImageUrl: string | null;
+  shopifyPrice: string | null;
+  quantity: number;
+  role: string | null;
+}
+
 interface GroupFormState {
   name: string; slug: string; displayType: string; sortOrder: string;
   isRequired: boolean; helperText: string; stepNumber: string;
@@ -113,6 +140,13 @@ const COLOR_PRESETS = [
   '#FFFFFF', '#F5F5DC', '#D2B48C', '#8B6914', '#4A3728',
   '#2C2C2C', '#000000', '#808080', '#C0C0C0', '#B5651D',
   '#556B2F', '#1E3A5F', '#8B0000', '#4B0082', '#CD853F',
+];
+
+const ROLE_OPTIONS = [
+  { label: 'Component', value: 'component' },
+  { label: 'Included', value: 'included' },
+  { label: 'Add-on', value: 'addon' },
+  { label: 'Pricing only', value: 'pricing_only' },
 ];
 
 // ──────────────────────────────────────────────
@@ -226,6 +260,12 @@ export default function ProductFamilyBuilderPage() {
   const [shopifySearchLoading, setShopifySearchLoading] = useState(false);
   const [shopifySearchError, setShopifySearchError] = useState('');
   const shopifySearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Product mappings
+  const [valueMappings, setValueMappings] = useState<ProductMapping[]>([]);
+  const [pendingMappings, setPendingMappings] = useState<PendingMapping[]>([]);
+  const [mappingsLoading, setMappingsLoading] = useState(false);
+  const [mappingPickerMode, setMappingPickerMode] = useState(false); // true = adding as mapping, false = single link
 
   // Delete
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'group' | 'value'; id: string; name: string } | null>(null);
@@ -341,6 +381,7 @@ export default function ProductFamilyBuilderPage() {
   }, []);
 
   const openShopifyPicker = useCallback(() => {
+    setMappingPickerMode(false);
     setShopifyPickerOpen(true); setShopifySearchQuery(''); setShopifySearchResults([]); setShopifySearchError('');
     searchShopifyForValue('');
   }, [searchShopifyForValue]);
@@ -367,6 +408,76 @@ export default function ProductFamilyBuilderPage() {
   const unlinkShopifyProduct = useCallback(() => {
     setValueForm((prev) => ({ ...prev, shopifyProductId: '', shopifyVariantId: '', shopifyProductTitle: '', shopifyVariantTitle: '', shopifySku: '', shopifyImageUrl: '', shopifyPrice: '' }));
   }, []);
+
+  // ── PRODUCT MAPPINGS ──
+  const loadMappings = useCallback(async (valueId: string) => {
+    setMappingsLoading(true);
+    try {
+      const res = await apiFetch(`/api/option-values/${valueId}/product-mappings`);
+      if (res.ok) {
+        const data = await res.json();
+        setValueMappings(data.productMappings ?? []);
+      }
+    } catch { /* ignore */ }
+    finally { setMappingsLoading(false); }
+  }, []);
+
+  const addMappingFromPicker = useCallback((product: ShopifyProductWithVariants, variant: ShopifyVariant) => {
+    const mapping: PendingMapping = {
+      shopifyProductId: product.id,
+      shopifyVariantId: variant.id,
+      shopifyProductTitle: product.title,
+      shopifyVariantTitle: variant.title,
+      shopifySku: variant.sku ?? null,
+      shopifyImageUrl: variant.imageUrl ?? product.featuredImageUrl ?? null,
+      shopifyPrice: variant.price,
+      quantity: 1,
+      role: 'component',
+    };
+
+    if (editingValue) {
+      // Save immediately via API
+      apiFetch(`/api/option-values/${editingValue.id}/product-mappings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mapping),
+      }).then((res) => {
+        if (res.ok) loadMappings(editingValue.id);
+      });
+    } else {
+      // Pending — will be saved after value creation
+      setPendingMappings((prev) => [...prev, mapping]);
+    }
+    setShopifyPickerOpen(false);
+  }, [editingValue, loadMappings]);
+
+  const removeMapping = useCallback(async (mappingId: string) => {
+    const res = await apiFetch(`/api/option-value-product-mappings/${mappingId}`, { method: 'DELETE' });
+    if (res.ok && editingValue) loadMappings(editingValue.id);
+  }, [editingValue, loadMappings]);
+
+  const removePendingMapping = useCallback((index: number) => {
+    setPendingMappings((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const savePendingMappings = useCallback(async (valueId: string) => {
+    if (pendingMappings.length === 0) return;
+    await apiFetch(`/api/option-values/${valueId}/product-mappings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mappings: pendingMappings }),
+    });
+    setPendingMappings([]);
+  }, [pendingMappings]);
+
+  const openMappingPicker = useCallback(() => {
+    setMappingPickerMode(true);
+    setShopifyPickerOpen(true);
+    setShopifySearchQuery('');
+    setShopifySearchResults([]);
+    setShopifySearchError('');
+    searchShopifyForValue('');
+  }, [searchShopifyForValue]);
 
   // ── GROUP CRUD ──
   const openAddGroup = useCallback(() => {
@@ -431,7 +542,9 @@ export default function ProductFamilyBuilderPage() {
     setValueTargetGroupId(groupId); setEditingValue(null);
     const group = groups.find((g) => g.id === groupId);
     setValueForm({ ...BLANK_VALUE, sortOrder: String(group?.values.length ?? 0) });
-    setValueSlugTouched(false); setValueError(''); setImageUploadError(''); setShowColorPicker(false); setValueModalOpen(true);
+    setValueSlugTouched(false); setValueError(''); setImageUploadError(''); setShowColorPicker(false);
+    setValueMappings([]); setPendingMappings([]); setMappingPickerMode(false);
+    setValueModalOpen(true);
   }, [groups]);
 
   const openEditValue = useCallback((groupId: string, value: OptionValue) => {
@@ -443,8 +556,11 @@ export default function ProductFamilyBuilderPage() {
       shopifyProductTitle: value.shopifyProductTitle ?? '', shopifyVariantTitle: value.shopifyVariantTitle ?? '',
       shopifySku: value.shopifySku ?? '', shopifyImageUrl: value.shopifyImageUrl ?? '', shopifyPrice: value.shopifyPrice ?? '',
     });
-    setValueSlugTouched(true); setValueError(''); setImageUploadError(''); setShowColorPicker(false); setValueModalOpen(true);
-  }, []);
+    setValueSlugTouched(true); setValueError(''); setImageUploadError(''); setShowColorPicker(false);
+    setValueMappings([]); setPendingMappings([]); setMappingPickerMode(false);
+    loadMappings(value.id);
+    setValueModalOpen(true);
+  }, [loadMappings]);
 
   const saveValue = useCallback(async () => {
     if (!valueForm.name.trim()) { setValueError('Name is required'); return; }
@@ -466,10 +582,14 @@ export default function ProductFamilyBuilderPage() {
       const res = await apiFetch(url, { method: isEdit ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json();
       if (!res.ok) { setValueError(data.error ?? 'Save failed'); return; }
+      // Save pending mappings for newly created values
+      if (!isEdit && data.optionValue?.id && pendingMappings.length > 0) {
+        await savePendingMappings(data.optionValue.id);
+      }
       setValueModalOpen(false); setSuccessMsg(isEdit ? `"${valueForm.name}" updated` : `"${valueForm.name}" added`); await loadData();
     } catch (err: unknown) { setValueError(err instanceof Error ? err.message : 'Network error'); }
     finally { setValueSaving(false); }
-  }, [valueForm, editingValue, valueTargetGroupId, loadData]);
+  }, [valueForm, editingValue, valueTargetGroupId, loadData, pendingMappings, savePendingMappings]);
 
   // ── DELETE ──
   const confirmDelete = useCallback(async () => {
@@ -799,6 +919,66 @@ export default function ProductFamilyBuilderPage() {
         </BlockStack>
       </Modal.Section>
 
+      {/* Linked Products / Components (Multi-mapping) */}
+      <Modal.Section>
+        <BlockStack gap="300">
+          <InlineStack align="space-between" blockAlign="center">
+            <Text as="span" variant="bodyMd" fontWeight="semibold">Linked Products / Components</Text>
+            <Button size="slim" onClick={openMappingPicker}>Add Product</Button>
+          </InlineStack>
+
+          {mappingsLoading && (
+            <InlineStack gap="200" blockAlign="center"><Spinner size="small" /><Text as="span" variant="bodySm">Loading...</Text></InlineStack>
+          )}
+
+          {/* Saved mappings (for existing values) */}
+          {valueMappings.map((m) => (
+            <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--p-color-border-subdued, #ddd)', background: 'var(--p-color-bg-surface-secondary, #f6f6f7)' }}>
+              {m.shopifyImageUrl && <img src={m.shopifyImageUrl} alt={m.shopifyProductTitle ?? ''} style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <Text as="span" variant="bodySm" fontWeight="semibold">{m.shopifyProductTitle ?? 'Product'}</Text>
+                {m.shopifyVariantTitle && m.shopifyVariantTitle !== 'Default Title' && <Text as="p" variant="bodySm" tone="subdued">{m.shopifyVariantTitle}</Text>}
+                <InlineStack gap="200">
+                  {m.shopifySku && <Text as="span" variant="bodySm" tone="subdued">{`SKU: ${m.shopifySku}`}</Text>}
+                  {m.shopifyPrice && <Text as="span" variant="bodySm" tone="subdued">{`$${parseFloat(String(m.shopifyPrice)).toFixed(2)}`}</Text>}
+                </InlineStack>
+              </div>
+              <div style={{ width: 50 }}>
+                <TextField label="" labelHidden value={String(m.quantity)} type="number" autoComplete="off"
+                  onChange={(v: string) => {
+                    const qty = parseInt(v, 10);
+                    if (qty > 0) apiFetch(`/api/option-value-product-mappings/${m.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity: qty }) })
+                      .then(() => { if (editingValue) loadMappings(editingValue.id); });
+                  }} />
+              </div>
+              <Badge>{m.role ?? 'component'}</Badge>
+              <Button size="slim" variant="plain" tone="critical" onClick={() => removeMapping(m.id)}>✕</Button>
+            </div>
+          ))}
+
+          {/* Pending mappings (for new values not yet saved) */}
+          {pendingMappings.map((m, idx) => (
+            <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', borderRadius: '8px', border: '1px dashed var(--p-color-border-subdued, #ddd)' }}>
+              {m.shopifyImageUrl && <img src={m.shopifyImageUrl} alt={m.shopifyProductTitle ?? ''} style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <Text as="span" variant="bodySm" fontWeight="semibold">{m.shopifyProductTitle ?? 'Product'}</Text>
+                {m.shopifyVariantTitle && m.shopifyVariantTitle !== 'Default Title' && <Text as="p" variant="bodySm" tone="subdued">{m.shopifyVariantTitle}</Text>}
+              </div>
+              <Badge tone="attention">Pending</Badge>
+              <Button size="slim" variant="plain" tone="critical" onClick={() => removePendingMapping(idx)}>✕</Button>
+            </div>
+          ))}
+
+          {valueMappings.length === 0 && pendingMappings.length === 0 && !mappingsLoading && (
+            <Text as="p" variant="bodySm" tone="subdued">No product mappings yet. Add Shopify products that this option value represents in a bundle.</Text>
+          )}
+
+          {!editingValue && pendingMappings.length > 0 && (
+            <Text as="p" variant="bodySm" tone="subdued">Pending mappings will be saved when you click Add.</Text>
+          )}
+        </BlockStack>
+      </Modal.Section>
+
       {/* Image */}
       <Modal.Section>
         <BlockStack gap="300">
@@ -873,7 +1053,7 @@ export default function ProductFamilyBuilderPage() {
 
   // ── RENDER: Shopify Picker Modal ──
   function renderShopifyPickerModal() {
-    return (<Modal open={shopifyPickerOpen} onClose={() => setShopifyPickerOpen(false)} title="Link Shopify Product / Variant">
+    return (<Modal open={shopifyPickerOpen} onClose={() => { setShopifyPickerOpen(false); setMappingPickerMode(false); }} title={mappingPickerMode ? 'Add Product Mapping' : 'Link Shopify Product / Variant'}>
       <Modal.Section>
         <BlockStack gap="300">
           <TextField label="Search products" value={shopifySearchQuery} onChange={handleShopifySearchChange}
@@ -889,7 +1069,7 @@ export default function ProductFamilyBuilderPage() {
                 <Badge tone={product.status === 'ACTIVE' ? 'success' : undefined}>{product.status}</Badge>
               </div>
               {product.variants.map((variant) => (
-                <div key={variant.id} onClick={() => selectShopifyVariant(product, variant)}
+                <div key={variant.id} onClick={() => mappingPickerMode ? addMappingFromPicker(product, variant) : selectShopifyVariant(product, variant)}
                   style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px 8px 24px', cursor: 'pointer', borderTop: '1px solid #eee' }}
                   onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#f1f2f3'; }}
                   onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
