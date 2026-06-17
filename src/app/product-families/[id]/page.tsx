@@ -48,6 +48,7 @@ interface OptionGroup {
   isRequired: boolean;
   helperText: string | null;
   stepNumber: number | null;
+  variantProfileId: string | null;
   isConditional: boolean;
   visibilityConditions: ConditionRow[] | null;
   values: OptionValue[];
@@ -57,6 +58,20 @@ interface ProductFamily {
   id: string; name: string; handle: string; slug: string;
   category: string | null; description: string | null;
   status: string; basePrice: string; shopifyProductId: string | null;
+}
+
+interface VariantProfile {
+  id: string;
+  productFamilyId: string;
+  name: string;
+  slug: string;
+  shopifyVariantId: string | null;
+  shopifyVariantTitle: string | null;
+  shopifySku: string | null;
+  imageUrl: string | null;
+  sortOrder: number;
+  isDefault: boolean;
+  isActive: boolean;
 }
 
 interface ShopifyVariant {
@@ -102,6 +117,7 @@ interface PendingMapping {
 interface GroupFormState {
   name: string; slug: string; displayType: string; sortOrder: string;
   isRequired: boolean; helperText: string; stepNumber: string;
+  variantProfileId: string;
   isConditional: boolean; conditions: ConditionRow[];
 }
 
@@ -115,7 +131,8 @@ interface ValueFormState {
 
 const BLANK_GROUP: GroupFormState = {
   name: '', slug: '', displayType: 'TILE', sortOrder: '', isRequired: true,
-  helperText: '', stepNumber: '', isConditional: false, conditions: [],
+  helperText: '', stepNumber: '', variantProfileId: '',
+  isConditional: false, conditions: [],
 };
 
 const BLANK_VALUE: ValueFormState = {
@@ -227,6 +244,9 @@ export default function ProductFamilyBuilderPage() {
 
   const [family, setFamily] = useState<ProductFamily | null>(null);
   const [groups, setGroups] = useState<OptionGroup[]>([]);
+  const [variantProfiles, setVariantProfiles] = useState<VariantProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null); // null = "All / Global"
+  const [profilesLoading, setProfilesLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -287,9 +307,10 @@ export default function ProductFamilyBuilderPage() {
   const loadData = useCallback(async () => {
     setLoading(true); setError('');
     try {
-      const [famRes, grpRes] = await Promise.all([
+      const [famRes, grpRes, profRes] = await Promise.all([
         apiFetch(`/api/product-families/${familyId}`),
         apiFetch(`/api/options?familyId=${familyId}`),
+        apiFetch(`/api/product-families/${familyId}/variant-profiles`),
       ]);
       if (!famRes.ok) { const b = await famRes.json().catch(() => ({})); throw new Error(b.error ?? 'Failed to load product family'); }
       if (!grpRes.ok) { const b = await grpRes.json().catch(() => ({})); throw new Error(b.error ?? 'Failed to load option groups'); }
@@ -297,6 +318,10 @@ export default function ProductFamilyBuilderPage() {
       const grpData = await grpRes.json();
       setFamily(famData.family);
       setGroups(grpData.optionGroups ?? []);
+      if (profRes.ok) {
+        const profData = await profRes.json();
+        setVariantProfiles(profData.variantProfiles ?? []);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load');
     } finally { setLoading(false); }
@@ -349,6 +374,28 @@ export default function ProductFamilyBuilderPage() {
     } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Paste failed'); }
     finally { setPasting(false); }
   }, [clipboardInfo, familyId, loadData]);
+
+  // ── VARIANT PROFILES ──
+  const handleImportProfiles = useCallback(async () => {
+    setProfilesLoading(true);
+    try {
+      const res = await apiFetch(`/api/product-families/${familyId}/variant-profiles`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'import-from-shopify' }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error ?? 'Import failed'); return; }
+      setSuccessMsg(data.message ?? 'Profiles imported');
+      await loadData();
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Import failed'); }
+    finally { setProfilesLoading(false); }
+  }, [familyId, loadData]);
+
+  // Filter groups by selected profile
+  const filteredGroups = selectedProfileId === null
+    ? groups // "All" tab: show everything
+    : groups.filter((g) => g.variantProfileId === null || g.variantProfileId === selectedProfileId);
 
   // ── IMAGE UPLOAD ──
   const handleImageUpload = useCallback(async (file: File) => {
@@ -482,9 +529,9 @@ export default function ProductFamilyBuilderPage() {
   // ── GROUP CRUD ──
   const openAddGroup = useCallback(() => {
     setEditingGroup(null);
-    setGroupForm({ ...BLANK_GROUP, sortOrder: String(groups.length) });
+    setGroupForm({ ...BLANK_GROUP, sortOrder: String(groups.length), variantProfileId: selectedProfileId ?? '' });
     setGroupSlugTouched(false); setGroupError(''); setGroupModalOpen(true);
-  }, [groups.length]);
+  }, [groups.length, selectedProfileId]);
 
   const openEditGroup = useCallback((group: OptionGroup) => {
     setEditingGroup(group);
@@ -495,6 +542,7 @@ export default function ProductFamilyBuilderPage() {
       name: group.name, slug: group.slug, displayType: group.displayType,
       sortOrder: String(group.sortOrder), isRequired: group.isRequired,
       helperText: group.helperText ?? '', stepNumber: group.stepNumber != null ? String(group.stepNumber) : '',
+      variantProfileId: group.variantProfileId ?? '',
       isConditional: group.isConditional, conditions,
     });
     setGroupSlugTouched(true); setGroupError(''); setGroupModalOpen(true);
@@ -509,6 +557,7 @@ export default function ProductFamilyBuilderPage() {
       displayType: groupForm.displayType, isRequired: groupForm.isRequired,
       helperText: groupForm.helperText.trim() || null,
       stepNumber: groupForm.stepNumber ? parseInt(groupForm.stepNumber, 10) : null,
+      variantProfileId: groupForm.variantProfileId || null,
       isConditional: groupForm.isConditional,
       visibilityConditions: groupForm.isConditional && groupForm.conditions.length > 0
         ? groupForm.conditions : null,
@@ -725,6 +774,43 @@ export default function ProductFamilyBuilderPage() {
   // ── RENDER: Option Builder ──
   function renderOptionBuilder() {
     return (<BlockStack gap="400">
+
+      {/* ── Variant Profile Tabs ── */}
+      {variantProfiles.length > 0 && (
+        <Card>
+          <BlockStack gap="200">
+            <InlineStack align="space-between" blockAlign="center">
+              <Text as="span" variant="bodySm" fontWeight="semibold">Variant Profiles</Text>
+              <Button size="slim" variant="plain" onClick={handleImportProfiles} loading={profilesLoading}>Import from Shopify</Button>
+            </InlineStack>
+            <InlineStack gap="200" wrap>
+              <div onClick={() => setSelectedProfileId(null)}
+                style={{ padding: '6px 14px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: selectedProfileId === null ? 600 : 400,
+                  background: selectedProfileId === null ? '#111' : '#f1f1f1', color: selectedProfileId === null ? '#fff' : '#333', transition: 'all 0.15s ease' }}>
+                All / Global
+              </div>
+              {variantProfiles.map((p) => (
+                <div key={p.id} onClick={() => setSelectedProfileId(p.id)}
+                  style={{ padding: '6px 14px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: selectedProfileId === p.id ? 600 : 400,
+                    background: selectedProfileId === p.id ? '#111' : '#f1f1f1', color: selectedProfileId === p.id ? '#fff' : '#333', transition: 'all 0.15s ease' }}>
+                  {p.name}
+                </div>
+              ))}
+            </InlineStack>
+          </BlockStack>
+        </Card>
+      )}
+
+      {/* ── Import button when no profiles exist ── */}
+      {variantProfiles.length === 0 && family?.shopifyProductId && (
+        <Card>
+          <InlineStack align="space-between" blockAlign="center">
+            <Text as="span" variant="bodySm" tone="subdued">No variant profiles. Import Shopify variants to assign option groups per variant.</Text>
+            <Button size="slim" onClick={handleImportProfiles} loading={profilesLoading}>Import Variants from Shopify</Button>
+          </InlineStack>
+        </Card>
+      )}
+
       <InlineStack align="space-between" blockAlign="center">
         <Text as="h2" variant="headingSm">Option Groups</Text>
         <InlineStack gap="200">
@@ -736,12 +822,15 @@ export default function ProductFamilyBuilderPage() {
           <Button onClick={openAddGroup}>Add Option Group</Button>
         </InlineStack>
       </InlineStack>
-      {groups.length === 0 && (<Card><BlockStack gap="200">
+      {filteredGroups.length === 0 && (<Card><BlockStack gap="200">
         <Text as="p" variant="bodyMd">No option groups yet.</Text>
         <Text as="p" variant="bodySm" tone="subdued">Create your first option group to start building the configurator.</Text>
       </BlockStack></Card>)}
-      {groups.map((group) => {
+      {filteredGroups.map((group) => {
         const isVisible = !group.isConditional || evaluateVisibility(group.visibilityConditions, previewSelections);
+        const profileName = group.variantProfileId
+          ? variantProfiles.find((p) => p.id === group.variantProfileId)?.name ?? 'Variant'
+          : null;
         return (
         <Card key={group.id}>
           <BlockStack gap="300">
@@ -752,6 +841,8 @@ export default function ProductFamilyBuilderPage() {
                 {group.isRequired && <Badge tone="info">Required</Badge>}
                 {group.isConditional && <Badge tone="warning">Conditional</Badge>}
                 {group.isConditional && !isVisible && <Badge tone="attention">Hidden</Badge>}
+                {profileName && <Badge>{profileName}</Badge>}
+                {!group.variantProfileId && variantProfiles.length > 0 && <Badge tone="info">Global</Badge>}
                 <Text as="span" variant="bodySm" tone="subdued">{group.slug}</Text>
               </InlineStack>
               <InlineStack gap="100">
@@ -817,6 +908,16 @@ export default function ProductFamilyBuilderPage() {
           </FormLayout.Group>
           <TextField label="Helper Text" value={groupForm.helperText} autoComplete="off"
             onChange={(v: string) => setGroupForm((p) => ({ ...p, helperText: v }))} placeholder="Shown below the group name" />
+          {variantProfiles.length > 0 && (
+            <Select label="Variant Profile" value={groupForm.variantProfileId}
+              options={[
+                { label: 'Global (all variants)', value: '' },
+                ...variantProfiles.map((p) => ({ label: p.name, value: p.id })),
+              ]}
+              onChange={(v: string) => setGroupForm((p) => ({ ...p, variantProfileId: v }))}
+              helpText="Assign this group to a specific variant, or leave as Global"
+            />
+          )}
         </FormLayout>
       </Modal.Section>
 

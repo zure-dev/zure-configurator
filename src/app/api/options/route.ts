@@ -55,6 +55,7 @@ export async function POST(request: NextRequest) {
       isRequired: body.isRequired,
       helperText: body.helperText,
       stepNumber: body.stepNumber,
+      variantProfileId: body.variantProfileId,
       isConditional: body.isConditional,
       visibilityConditions: body.visibilityConditions,
     });

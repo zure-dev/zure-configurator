@@ -65,6 +65,7 @@ model ProductFamily {
   defaultMediaSet Json?
 
   shopifyLink    ProductFamilyShopifyLink?
+  variantProfiles ProductFamilyVariantProfile[]
   optionGroups   OptionGroup[]
   dependencyRules  OptionDependencyRule[]
   exclusionRules   OptionExclusionRule[]
@@ -111,6 +112,34 @@ model ProductFamilyShopifyLink {
 // OPTION LAYER
 // ──────────────────────────────────────────────
 
+// ── Variant Profiles ──
+// Each product family can have variant profiles (e.g. 900x480, 1200x480, 1500 Single).
+// Option groups can be global (variantProfileId = null) or variant-specific.
+model ProductFamilyVariantProfile {
+  id              String        @id @default(cuid())
+  productFamilyId String
+  productFamily   ProductFamily @relation(fields: [productFamilyId], references: [id], onDelete: Cascade)
+
+  name              String      // "900x480(D)x400mm"
+  slug              String      // "900x480"
+  shopifyVariantId  String?     // linked Shopify variant GID
+  shopifyVariantTitle String?   // cached variant title
+  shopifySku        String?     // cached SKU
+  imageUrl          String?     // variant image
+  sortOrder         Int         @default(0)
+  isDefault         Boolean     @default(false)
+  isActive          Boolean     @default(true)
+
+  optionGroups OptionGroup[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([productFamilyId, slug])
+  @@index([productFamilyId, sortOrder])
+  @@map("product_family_variant_profiles")
+}
+
 model OptionGroup {
   id              String        @id @default(cuid())
   productFamilyId String
@@ -122,6 +151,12 @@ model OptionGroup {
   isRequired      Boolean       @default(true)
   helperText      String?
   stepNumber      Int?
+
+  // ── Variant Profile Assignment ──
+  // null = global (applies to all variants)
+  // set = only shows for this variant profile
+  variantProfileId String?
+  variantProfile   ProductFamilyVariantProfile? @relation(fields: [variantProfileId], references: [id], onDelete: SetNull)
 
   // ── Conditional Visibility ──
   isConditional        Boolean  @default(false)

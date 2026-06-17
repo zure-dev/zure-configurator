@@ -48,6 +48,7 @@ export async function PUT(
       isRequired: body.isRequired,
       helperText: body.helperText,
       stepNumber: body.stepNumber,
+      variantProfileId: body.variantProfileId,
       isConditional: body.isConditional,
       visibilityConditions: body.visibilityConditions,
     });

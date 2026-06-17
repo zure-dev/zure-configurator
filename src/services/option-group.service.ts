@@ -15,6 +15,7 @@ export interface CreateOptionGroupInput {
   isRequired?: boolean;
   helperText?: string | null;
   stepNumber?: number | null;
+  variantProfileId?: string | null;
   isConditional?: boolean;
   visibilityConditions?: Prisma.InputJsonValue | null;
 }
@@ -27,6 +28,7 @@ export interface UpdateOptionGroupInput {
   isRequired?: boolean;
   helperText?: string | null;
   stepNumber?: number | null;
+  variantProfileId?: string | null;
   isConditional?: boolean;
   visibilityConditions?: Prisma.InputJsonValue | null;
 }
@@ -175,6 +177,7 @@ export async function createOptionGroup(
       helperText: input.helperText ?? null,
       stepNumber: input.stepNumber ?? null,
       isConditional: input.isConditional ?? false,
+      variantProfileId: input.variantProfileId ?? null,
       visibilityConditions: input.visibilityConditions != null
         ? input.visibilityConditions
         : Prisma.JsonNull,
@@ -246,6 +249,7 @@ export async function updateOptionGroup(
   if (input.helperText !== undefined) updateData.helperText = input.helperText;
   if (input.stepNumber !== undefined) updateData.stepNumber = input.stepNumber;
   if (input.isConditional !== undefined) updateData.isConditional = input.isConditional;
+  if (input.variantProfileId !== undefined) updateData.variantProfileId = input.variantProfileId;
   if (input.visibilityConditions !== undefined) {
     updateData.visibilityConditions = input.visibilityConditions != null
       ? input.visibilityConditions
