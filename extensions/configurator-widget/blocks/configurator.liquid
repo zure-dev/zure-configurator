@@ -4,6 +4,7 @@
 {% endcomment %}
 
 {% if product %}
+  {% assign current_variant = product.selected_or_first_available_variant %}
   <div
     id="zure-configurator-root"
     data-product-id="{{ product.id }}"
@@ -12,6 +13,7 @@
     data-app-url="{{ block.settings.app_url }}"
     data-proxy-path="/apps/configurator"
     data-currency="{{ shop.currency }}"
+    data-variant-id="{{ current_variant.id }}"
     style="min-height: 200px;"
   >
     <div class="zure-cfg-loading">
@@ -70,7 +72,7 @@
       "type": "text",
       "id": "app_url",
       "label": "Configurator App URL (fallback)",
-      "info": "Only needed if App Proxy is not set up. Usually leave blank.",
+      "info": "Only needed if App Proxy is not set up.",
       "default": "https://zure-configurator-widget.vercel.app"
     },
     {

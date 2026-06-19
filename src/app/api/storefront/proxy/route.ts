@@ -48,12 +48,22 @@ export async function GET(request: NextRequest) {
       where: { id: family.id },
       select: {
         id: true, name: true, handle: true, basePrice: true,
+        variantProfiles: {
+          where: { isActive: true },
+          orderBy: { sortOrder: 'asc' },
+          select: {
+            id: true, name: true, slug: true,
+            shopifyVariantId: true, shopifyVariantTitle: true,
+            shopifySku: true, isDefault: true, isActive: true,
+          },
+        },
         optionGroups: {
           orderBy: { sortOrder: 'asc' },
           select: {
             id: true, name: true, slug: true, displayType: true,
             sortOrder: true, isRequired: true, helperText: true,
             stepNumber: true, isConditional: true, visibilityConditions: true,
+            variantProfileId: true,
             values: {
               orderBy: { sortOrder: 'asc' },
               select: {
