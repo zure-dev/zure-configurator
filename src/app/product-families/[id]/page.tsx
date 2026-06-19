@@ -713,14 +713,19 @@ export default function ProductFamilyBuilderPage() {
 
   // ── RENDER: Preview ──
   function renderPreview() {
-    if (groups.length === 0) {
+    // Show groups matching the selected profile (global + profile-specific)
+    const previewBaseGroups = selectedProfileId === null
+      ? groups
+      : groups.filter((g) => g.variantProfileId === null || g.variantProfileId === selectedProfileId);
+
+    if (previewBaseGroups.length === 0) {
       return (<Card><BlockStack gap="200">
         <Text as="h2" variant="headingSm">Live Preview</Text>
         <Text as="p" variant="bodySm" tone="subdued">Add option groups to see a preview.</Text>
       </BlockStack></Card>);
     }
 
-    const visibleGroups = groups.filter((g) =>
+    const visibleGroups = previewBaseGroups.filter((g) =>
       !g.isConditional || evaluateVisibility(g.visibilityConditions, previewSelections)
     );
 
@@ -763,9 +768,9 @@ export default function ProductFamilyBuilderPage() {
           </InlineStack>
         </BlockStack>
       ))}
-      {visibleGroups.length < groups.length && (
+      {visibleGroups.length < previewBaseGroups.length && (
         <Text as="p" variant="bodySm" tone="subdued">
-          {`${groups.length - visibleGroups.length} group${groups.length - visibleGroups.length !== 1 ? 's' : ''} hidden by conditional rules`}
+          {`${previewBaseGroups.length - visibleGroups.length} group${previewBaseGroups.length - visibleGroups.length !== 1 ? 's' : ''} hidden by conditional rules`}
         </Text>
       )}
     </BlockStack></Card>);
@@ -811,8 +816,13 @@ export default function ProductFamilyBuilderPage() {
         </Card>
       )}
 
+      {/* ── Option Groups Header ── */}
       <InlineStack align="space-between" blockAlign="center">
-        <Text as="h2" variant="headingSm">Option Groups</Text>
+        <Text as="h2" variant="headingSm">
+          {selectedProfileId
+            ? `Option Groups for: ${variantProfiles.find((p) => p.id === selectedProfileId)?.name ?? 'Variant'}`
+            : 'Option Groups'}
+        </Text>
         <InlineStack gap="200">
           {clipboardInfo && (
             <Button onClick={handlePasteGroup} loading={pasting} variant="secondary">
@@ -822,70 +832,107 @@ export default function ProductFamilyBuilderPage() {
           <Button onClick={openAddGroup}>Add Option Group</Button>
         </InlineStack>
       </InlineStack>
-      {filteredGroups.length === 0 && (<Card><BlockStack gap="200">
-        <Text as="p" variant="bodyMd">No option groups yet.</Text>
-        <Text as="p" variant="bodySm" tone="subdued">Create your first option group to start building the configurator.</Text>
-      </BlockStack></Card>)}
-      {filteredGroups.map((group) => {
-        const isVisible = !group.isConditional || evaluateVisibility(group.visibilityConditions, previewSelections);
-        const profileName = group.variantProfileId
-          ? variantProfiles.find((p) => p.id === group.variantProfileId)?.name ?? 'Variant'
-          : null;
-        return (
-        <Card key={group.id}>
-          <BlockStack gap="300">
-            <InlineStack align="space-between" blockAlign="center">
-              <InlineStack gap="200" blockAlign="center">
-                <Text as="span" variant="bodyMd" fontWeight="bold">{group.name}</Text>
-                {displayTypeBadge(group.displayType)}
-                {group.isRequired && <Badge tone="info">Required</Badge>}
-                {group.isConditional && <Badge tone="warning">Conditional</Badge>}
-                {group.isConditional && !isVisible && <Badge tone="attention">Hidden</Badge>}
-                {profileName && <Badge>{profileName}</Badge>}
-                {!group.variantProfileId && variantProfiles.length > 0 && <Badge tone="info">Global</Badge>}
-                <Text as="span" variant="bodySm" tone="subdued">{group.slug}</Text>
-              </InlineStack>
-              <InlineStack gap="100">
-                <Button size="slim" variant="plain" onClick={() => openEditGroup(group)}>Edit</Button>
-                <Button size="slim" variant="plain" onClick={() => handleDuplicateGroup(group.id, group.name)} loading={duplicating}>Duplicate</Button>
-                <Button size="slim" variant="plain" onClick={() => handleCopyGroup(group.id, group.name)} loading={copying}>Copy</Button>
-                <Button size="slim" variant="plain" tone="critical" onClick={() => setDeleteTarget({ type: 'group', id: group.id, name: group.name })}>Delete</Button>
-              </InlineStack>
-            </InlineStack>
-            {group.helperText && <Text as="span" variant="bodySm" tone="subdued">{group.helperText}</Text>}
-            <Divider />
-            <BlockStack gap="200">
-              <InlineStack align="space-between" blockAlign="center">
-                <Text as="span" variant="bodySm" fontWeight="semibold">{`Values (${group.values.length})`}</Text>
-                <Button size="slim" onClick={() => openAddValue(group.id)}>Add Value</Button>
-              </InlineStack>
-              {group.values.length === 0 && <Text as="p" variant="bodySm" tone="subdued">No values yet.</Text>}
-              {group.values.map((val) => (
-                <div key={val.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--p-color-border-subdued, #e1e3e5)' }}>
-                  {val.swatchColor && <div style={{ width: 20, height: 20, borderRadius: '50%', background: val.swatchColor, border: '1px solid #ccc', flexShrink: 0 }} />}
-                  {val.thumbnailUrl && !val.swatchColor && <img src={val.thumbnailUrl} alt={val.name} style={{ width: 24, height: 24, objectFit: 'cover', borderRadius: 3, flexShrink: 0 }} />}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <Text as="span" variant="bodySm" fontWeight="semibold">{val.name}</Text>
-                    <Text as="span" variant="bodySm" tone="subdued">{` (${val.slug})`}</Text>
-                  </div>
-                  {val.isDefault && <Badge tone="success">Default</Badge>}
-                  {val.shopifyProductId && <Badge>Linked</Badge>}
-                  <Button size="slim" variant="plain" onClick={() => openEditValue(group.id, val)}>Edit</Button>
-                  <Button size="slim" variant="plain" tone="critical" onClick={() => setDeleteTarget({ type: 'value', id: val.id, name: val.name })}>Delete</Button>
-                </div>
-              ))}
-            </BlockStack>
+
+      {/* ── Scoped view when a variant profile is selected ── */}
+      {selectedProfileId !== null && (() => {
+        const profileName = variantProfiles.find((p) => p.id === selectedProfileId)?.name ?? 'Variant';
+        const globalGroups = groups.filter((g) => g.variantProfileId === null);
+        const profileGroups = groups.filter((g) => g.variantProfileId === selectedProfileId);
+
+        return (<BlockStack gap="400">
+          {/* Variant-specific groups */}
+          <BlockStack gap="200">
+            <Text as="span" variant="bodySm" fontWeight="semibold" tone="subdued">{`${profileName} Groups`}</Text>
+            {profileGroups.length === 0 && (<Card><Text as="p" variant="bodySm" tone="subdued">{`No option groups for ${profileName} yet. Click "Add Option Group" to create one.`}</Text></Card>)}
+            {profileGroups.map((group) => renderGroupCard(group))}
           </BlockStack>
-        </Card>
-      );})}
+
+          {/* Global groups */}
+          {globalGroups.length > 0 && (
+            <BlockStack gap="200">
+              <Text as="span" variant="bodySm" fontWeight="semibold" tone="subdued">Global Groups (apply to all variants)</Text>
+              {globalGroups.map((group) => renderGroupCard(group))}
+            </BlockStack>
+          )}
+        </BlockStack>);
+      })()}
+
+      {/* ── All / Global view (no profile selected) ── */}
+      {selectedProfileId === null && (<BlockStack gap="200">
+        {groups.length === 0 && (<Card><BlockStack gap="200">
+          <Text as="p" variant="bodyMd">No option groups yet.</Text>
+          <Text as="p" variant="bodySm" tone="subdued">Create your first option group to start building the configurator.</Text>
+        </BlockStack></Card>)}
+        {groups.map((group) => renderGroupCard(group))}
+      </BlockStack>)}
+
     </BlockStack>);
+  }
+
+  // ── RENDER: Group Card (shared between scoped and all views) ──
+  function renderGroupCard(group: OptionGroup) {
+    const isVisible = !group.isConditional || evaluateVisibility(group.visibilityConditions, previewSelections);
+    const profileName = group.variantProfileId
+      ? variantProfiles.find((p) => p.id === group.variantProfileId)?.name ?? 'Variant'
+      : null;
+    return (
+      <Card key={group.id}>
+        <BlockStack gap="300">
+          <InlineStack align="space-between" blockAlign="center">
+            <InlineStack gap="200" blockAlign="center">
+              <Text as="span" variant="bodyMd" fontWeight="bold">{group.name}</Text>
+              {displayTypeBadge(group.displayType)}
+              {group.isRequired && <Badge tone="info">Required</Badge>}
+              {group.isConditional && <Badge tone="warning">Conditional</Badge>}
+              {group.isConditional && !isVisible && <Badge tone="attention">Hidden</Badge>}
+              {profileName && <Badge>{profileName}</Badge>}
+              {!group.variantProfileId && variantProfiles.length > 0 && <Badge tone="info">Global</Badge>}
+              <Text as="span" variant="bodySm" tone="subdued">{group.slug}</Text>
+            </InlineStack>
+            <InlineStack gap="100">
+              <Button size="slim" variant="plain" onClick={() => openEditGroup(group)}>Edit</Button>
+              <Button size="slim" variant="plain" onClick={() => handleDuplicateGroup(group.id, group.name)} loading={duplicating}>Duplicate</Button>
+              <Button size="slim" variant="plain" onClick={() => handleCopyGroup(group.id, group.name)} loading={copying}>Copy</Button>
+              <Button size="slim" variant="plain" tone="critical" onClick={() => setDeleteTarget({ type: 'group', id: group.id, name: group.name })}>Delete</Button>
+            </InlineStack>
+          </InlineStack>
+          {group.helperText && <Text as="span" variant="bodySm" tone="subdued">{group.helperText}</Text>}
+          <Divider />
+          <BlockStack gap="200">
+            <InlineStack align="space-between" blockAlign="center">
+              <Text as="span" variant="bodySm" fontWeight="semibold">{`Values (${group.values.length})`}</Text>
+              <Button size="slim" onClick={() => openAddValue(group.id)}>Add Value</Button>
+            </InlineStack>
+            {group.values.length === 0 && <Text as="p" variant="bodySm" tone="subdued">No values yet.</Text>}
+            {group.values.map((val) => (
+              <div key={val.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--p-color-border-subdued, #e1e3e5)' }}>
+                {val.swatchColor && <div style={{ width: 20, height: 20, borderRadius: '50%', background: val.swatchColor, border: '1px solid #ccc', flexShrink: 0 }} />}
+                {val.thumbnailUrl && !val.swatchColor && <img src={val.thumbnailUrl} alt={val.name} style={{ width: 24, height: 24, objectFit: 'cover', borderRadius: 3, flexShrink: 0 }} />}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <Text as="span" variant="bodySm" fontWeight="semibold">{val.name}</Text>
+                  <Text as="span" variant="bodySm" tone="subdued">{` (${val.slug})`}</Text>
+                </div>
+                {val.isDefault && <Badge tone="success">Default</Badge>}
+                {val.shopifyProductId && <Badge>Linked</Badge>}
+                <Button size="slim" variant="plain" onClick={() => openEditValue(group.id, val)}>Edit</Button>
+                <Button size="slim" variant="plain" tone="critical" onClick={() => setDeleteTarget({ type: 'value', id: val.id, name: val.name })}>Delete</Button>
+              </div>
+            ))}
+          </BlockStack>
+        </BlockStack>
+      </Card>
+    );
   }
 
   // ── RENDER: Group Modal ──
   function renderGroupModal() {
     const isEdit = editingGroup !== null;
     return (<Modal open={groupModalOpen} onClose={() => setGroupModalOpen(false)}
-      title={isEdit ? `Edit: ${editingGroup?.name ?? ''}` : 'Add Option Group'}
+      title={isEdit
+        ? `Edit: ${editingGroup?.name ?? ''}`
+        : selectedProfileId
+          ? `Add Option Group — ${variantProfiles.find((p) => p.id === selectedProfileId)?.name ?? 'Variant'}`
+          : 'Add Option Group'}
       primaryAction={{ content: isEdit ? 'Save' : 'Add', onAction: saveGroup, loading: groupSaving, disabled: !groupForm.name.trim() }}
       secondaryActions={[{ content: 'Cancel', onAction: () => setGroupModalOpen(false) }]}>
       <Modal.Section>
