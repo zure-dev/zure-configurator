@@ -7,6 +7,7 @@ import {
   Divider, DropZone,
 } from '@shopify/polaris';
 import { useParams, useRouter } from 'next/navigation';
+import { apiFetch } from '@/lib/api-client';
 
 // ──────────────────────────────────────────────
 // Types
@@ -172,17 +173,6 @@ const ROLE_OPTIONS = [
 
 function toSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-}
-
-function apiFetch(path: string, options?: RequestInit): Promise<Response> {
-  let shopDomain = '';
-  if (typeof window !== 'undefined') {
-    const params = new URLSearchParams(window.location.search);
-    shopDomain = params.get('shop') ?? '';
-  }
-  const separator = path.includes('?') ? '&' : '?';
-  const url = shopDomain ? `${path}${separator}shop=${shopDomain}` : path;
-  return fetch(url, { credentials: 'include', ...options });
 }
 
 function displayTypeBadge(dt: string) {
