@@ -22,6 +22,7 @@ import {
   useIndexResourceState,
 } from '@shopify/polaris';
 import { useRouter } from 'next/navigation';
+import { apiFetch, getShopDomain } from '@/lib/api-client';
 
 // ──────────────────────────────────────────────
 // Types
@@ -136,20 +137,6 @@ function shortDate(iso: string): string {
   }
 }
 
-function apiFetch(path: string, options?: RequestInit): Promise<Response> {
-  let shopDomain = '';
-  if (typeof window !== 'undefined') {
-    const params = new URLSearchParams(window.location.search);
-    shopDomain = params.get('shop') ?? '';
-  }
-  const separator = path.includes('?') ? '&' : '?';
-  const url = shopDomain ? `${path}${separator}shop=${shopDomain}` : path;
-  return fetch(url, {
-    credentials: 'include',
-    ...options,
-  });
-}
-
 function validateManualForm(
   form: ManualFormState,
   families: ProductFamily[],
@@ -251,11 +238,9 @@ export default function ProductFamiliesPage() {
   // ────────────────────────────────────────────
 
   const navigateToBuilder = useCallback((familyId: string) => {
-    const shopParam = typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.search).get('shop') ?? ''
-      : '';
-    const url = shopParam
-      ? `/product-families/${familyId}?shop=${shopParam}`
+    const shop = getShopDomain();
+    const url = shop
+      ? `/product-families/${familyId}?shop=${encodeURIComponent(shop)}`
       : `/product-families/${familyId}`;
     router.push(url);
   }, [router]);

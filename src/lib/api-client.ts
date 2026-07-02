@@ -3,7 +3,8 @@
 // ──────────────────────────────────────────────
 // Shared API client for Zure Configurator admin
 //
-// Automatically appends ?shop= to all API calls.
+// The middleware ensures ?shop= is always in the page URL.
+// This client reads it and appends it to every API call.
 // On 401, redirects to Shopify OAuth re-auth.
 // Import this in every admin page instead of bare fetch().
 // ──────────────────────────────────────────────
@@ -13,13 +14,14 @@ let redirecting = false;
 
 /**
  * Get the current shop domain from multiple sources.
- * Shopify always includes ?shop= when loading the app in the admin iframe.
+ * Middleware guarantees ?shop= is in the URL for admin pages,
+ * but fallbacks exist for resilience.
  */
 export function getShopDomain(): string {
   if (cachedShop) return cachedShop;
   if (typeof window === 'undefined') return '';
 
-  // 1. URL query param (Shopify sets this in the iframe)
+  // 1. URL query param (middleware ensures this is always present)
   const params = new URLSearchParams(window.location.search);
   const fromUrl = params.get('shop');
   if (fromUrl) {
@@ -53,7 +55,7 @@ export function getShopDomain(): string {
 
 /**
  * Make an API call with shop context automatically included.
- * On 401 Unauthorized, redirects to Shopify OAuth.
+ * Sends cookies for session fallback. On 401, redirects to OAuth.
  */
 export function apiFetch(url: string, opts?: RequestInit): Promise<Response> {
   const shop = getShopDomain();
@@ -65,17 +67,15 @@ export function apiFetch(url: string, opts?: RequestInit): Promise<Response> {
     finalUrl = `${url}${separator}shop=${encodeURIComponent(shop)}`;
   }
 
-  return fetch(finalUrl, opts).then((res) => {
+  return fetch(finalUrl, { credentials: 'include', ...opts }).then((res) => {
     if (res.status === 401 && !redirecting) {
       redirecting = true;
 
-      // Show user-friendly message
       const banner = document.createElement('div');
       banner.style.cssText = 'position:fixed;top:0;left:0;right:0;padding:16px;background:#1a1a2e;color:#fff;text-align:center;z-index:99999;font-family:system-ui;font-size:14px;';
       banner.textContent = 'Session expired. Reconnecting to Shopify…';
       document.body.appendChild(banner);
 
-      // Redirect to re-auth
       if (shop) {
         setTimeout(() => {
           window.location.href = `/api/auth?shop=${encodeURIComponent(shop)}`;
@@ -84,7 +84,6 @@ export function apiFetch(url: string, opts?: RequestInit): Promise<Response> {
         banner.textContent = 'Session expired. Please reopen the app from your Shopify admin.';
       }
 
-      // Return a never-resolving promise since we're redirecting
       return new Promise<Response>(() => {});
     }
     return res;
