@@ -164,6 +164,15 @@
 
   function calculatePrice() {
     var base = parseFloat(configurator.basePrice) || 0, total = base;
+    var groups = getVisibleGroups();
+    for (var g = 0; g < groups.length; g++) {
+      var grp = groups[g], slug = selections[grp.slug];
+      if (!slug) continue;
+      var vals = grp.values || [];
+      for (var v = 0; v < vals.length; v++) {
+        if (vals[v].slug === slug && vals[v].shopifyPrice) { total += parseFloat(vals[v].shopifyPrice) || 0; break; }
+      }
+    }
     for (var i = 0; i < priceRules.length; i++) { var r = priceRules[i]; if (selections[r.optionGroupSlug] !== r.optionValueSlug) continue; var m = parseFloat(r.priceModifier) || 0; if (r.modifierType === 'ADDITIVE') total += m; else if (r.modifierType === 'PERCENTAGE') total += base * (m / 100); else if (r.modifierType === 'ABSOLUTE' || r.modifierType === 'OVERRIDE') total = m; }
     return total;
   }
@@ -188,8 +197,8 @@
       html += '</div>';
     }
     var tp = calculatePrice();
-    if (tp > 0) { html += '<div class="zure-cfg-price-summary"><span class="zure-cfg-price-label">Configured Price</span><span class="zure-cfg-price-value">' + fmt(tp) + '</span></div>'; }
-    html += '<button class="zure-cfg-cta" id="zure-cfg-add-to-cart">Add Configuration to Cart</button>';
+    if (tp > 0) { html += '<div class="zure-cfg-price-summary"><span class="zure-cfg-price-label">Total Price</span><span class="zure-cfg-price-value">' + fmt(tp) + '</span></div>'; }
+    html += '<button class="zure-cfg-cta" id="zure-cfg-add-to-cart">Add to Cart</button>';
     html += '<div id="zure-cfg-status" class="zure-cfg-status" style="display:none;"></div>';
     container.innerHTML = html; bind(); emitPriceUpdate();
   }
@@ -197,7 +206,7 @@
   function renderVal(g, v, dt) {
     var sel = selections[g.slug] === v.slug, pm = getPriceMod(g.slug, v.slug), ec = '', inner = '';
     if (dt === 'SWATCH' && v.swatchColor) { ec = ' zure-cfg-swatch'; inner += '<div class="zure-cfg-swatch-circle" style="background:' + ea(v.swatchColor) + ';"></div><span class="zure-cfg-value-label">' + eh(v.name) + '</span>'; }
-    else if ((dt === 'THUMBNAIL' || dt === 'TILE') && v.thumbnailUrl) { ec = ' zure-cfg-image'; inner += '<img class="zure-cfg-image-thumb" src="' + ea(v.thumbnailUrl) + '" alt="' + ea(v.name) + '" loading="lazy"/><span class="zure-cfg-value-label">' + eh(v.name) + '</span>'; }
+    else if ((dt === 'THUMBNAIL' || dt === 'TILE') && v.thumbnailUrl) { ec = ' zure-cfg-image" style="--hover-img:url(' + ea(v.thumbnailUrl) + ')'; inner += '<img class="zure-cfg-image-thumb" src="' + ea(v.thumbnailUrl) + '" alt="' + ea(v.name) + '" loading="lazy"/><span class="zure-cfg-value-label">' + eh(v.name) + '</span>'; }
     else { inner += '<span class="zure-cfg-value-label">' + eh(v.name) + '</span>'; }
     if (pm) inner += '<span class="zure-cfg-price-mod">' + eh(pm) + '</span>';
     return '<div class="zure-cfg-value' + ec + '" data-selected="' + sel + '" data-group-slug="' + ea(g.slug) + '" data-value-slug="' + ea(v.slug) + '" role="button" tabindex="0" aria-pressed="' + sel + '">' + inner + '</div>';
@@ -232,7 +241,7 @@
     if (!prepareUrl) {
       console.error('[ZureConfigurator] No proxy path available for cart preparation');
       if (st) { st.style.display = 'block'; st.style.background = '#fef2f2'; st.style.borderColor = '#fecaca'; st.style.color = '#991b1b'; st.textContent = 'Cart not configured. App Proxy required.'; }
-      if (btn) { btn.disabled = false; btn.textContent = 'Add Configuration to Cart'; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Add to Cart'; }
       cartLoading = false;
       return;
     }
@@ -256,7 +265,7 @@
       .catch(function (err) {
         console.error('[ZureConfigurator] Cart error:', err.message);
         if (st) { st.style.display = 'block'; st.style.background = '#fef2f2'; st.style.borderColor = '#fecaca'; st.style.color = '#991b1b'; st.textContent = err.message || 'Could not add to cart.'; }
-        if (btn) { btn.disabled = false; btn.textContent = 'Add Configuration to Cart'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Add to Cart'; }
         cartLoading = false;
       });
   }
