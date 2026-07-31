@@ -3,13 +3,15 @@ import { db } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
-function corsHeaders(): HeadersInit {
-  return {
+function corsHeaders(cacheControl?: string): HeadersInit {
+  const headers: Record<string, string> = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Max-Age': '86400',
   };
+  if (cacheControl) headers['Cache-Control'] = cacheControl;
+  return headers;
 }
 
 export async function OPTIONS() {
@@ -45,69 +47,86 @@ export async function GET(request: NextRequest) {
     debug.normalizedProductIds = candidates;
     debug.familySearched = true;
 
-    let family = null;
-    if (candidates.length > 0) {
-      family = await db.productFamily.findFirst({ where: { storeId: store.id, status: 'ACTIVE', shopifyProductId: { in: candidates } }, select: { id: true } });
-      if (!family) {
-        const inactive = await db.productFamily.findFirst({ where: { storeId: store.id, shopifyProductId: { in: candidates } }, select: { id: true, status: true, name: true } });
-        if (inactive) { debug.familyFoundInactive = true; return Response.json({ error: 'FAMILY_NOT_ACTIVE', message: `"${inactive.name}" has status "${inactive.status}". Set to ACTIVE.`, debug }, { status: 404, headers: corsHeaders() }); }
-      }
-    }
-    if (!family && handle) {
-      family = await db.productFamily.findFirst({ where: { storeId: store.id, status: 'ACTIVE', OR: [{ handle }, { slug: handle }] }, select: { id: true } });
-    }
-    if (!family) return Response.json({ error: 'PRODUCT_FAMILY_NOT_FOUND', message: 'No configurator for this product.', debug }, { status: 404, headers: corsHeaders() });
-
-    const fullFamily = await db.productFamily.findUnique({
-      where: { id: family.id },
-      select: {
-        id: true, name: true, handle: true, basePrice: true,
-        variantProfiles: {
-          where: { isActive: true },
-          orderBy: { sortOrder: 'asc' },
-          select: {
-            id: true, name: true, slug: true,
-            shopifyVariantId: true, shopifyVariantTitle: true,
-            shopifySku: true, isDefault: true, isActive: true,
-          },
+    // Single query: load full family data directly (saves a DB round trip)
+    const familySelect = {
+      id: true, name: true, handle: true, basePrice: true, status: true,
+      variantProfiles: {
+        where: { isActive: true },
+        orderBy: { sortOrder: 'asc' as const },
+        select: {
+          id: true, name: true, slug: true,
+          shopifyVariantId: true, shopifyVariantTitle: true,
+          shopifySku: true, isDefault: true, isActive: true,
         },
-        optionGroups: {
-          orderBy: { sortOrder: 'asc' },
-          select: {
-            id: true, name: true, slug: true, displayType: true,
-            sortOrder: true, isRequired: true, helperText: true,
-            stepNumber: true, isConditional: true, visibilityConditions: true,
-            variantProfileId: true,
-            values: {
-              orderBy: { sortOrder: 'asc' },
-              select: {
-                id: true, name: true, slug: true, sortOrder: true,
-                isDefault: true, swatchColor: true, thumbnailUrl: true,
-                description: true, shopifyVariantId: true,
-                shopifyPrice: true, shopifyImageUrl: true,
-                productMappings: {
-                  orderBy: { sortOrder: 'asc' },
-                  select: {
-                    id: true, shopifyVariantId: true, shopifyProductTitle: true,
-                    shopifyVariantTitle: true, shopifyImageUrl: true,
-                    shopifyPrice: true, quantity: true, role: true,
-                  },
+      },
+      optionGroups: {
+        orderBy: { sortOrder: 'asc' as const },
+        select: {
+          id: true, name: true, slug: true, displayType: true,
+          sortOrder: true, isRequired: true, helperText: true,
+          stepNumber: true, isConditional: true, visibilityConditions: true,
+          variantProfileId: true,
+          values: {
+            orderBy: { sortOrder: 'asc' as const },
+            select: {
+              id: true, name: true, slug: true, sortOrder: true,
+              isDefault: true, swatchColor: true, thumbnailUrl: true,
+              description: true, shopifyVariantId: true,
+              shopifyPrice: true, shopifyImageUrl: true,
+              productMappings: {
+                orderBy: { sortOrder: 'asc' as const },
+                select: {
+                  id: true, shopifyVariantId: true, shopifyProductTitle: true,
+                  shopifyVariantTitle: true, shopifyImageUrl: true,
+                  shopifyPrice: true, quantity: true, role: true,
                 },
               },
             },
           },
         },
-        priceRules: {
-          where: { isActive: true },
-          orderBy: { sortOrder: 'asc' },
-          select: { optionGroupSlug: true, optionValueSlug: true, priceModifier: true, modifierType: true, conditions: true },
-        },
       },
-    });
+      priceRules: {
+        where: { isActive: true },
+        orderBy: { sortOrder: 'asc' as const },
+        select: { optionGroupSlug: true, optionValueSlug: true, priceModifier: true, modifierType: true, conditions: true },
+      },
+    };
 
-    if (!fullFamily) return Response.json({ error: 'LOAD_FAILED', message: 'Could not load configurator data', debug }, { status: 500, headers: corsHeaders() });
+    let fullFamily = null;
 
-    return Response.json({ configurator: fullFamily }, { status: 200, headers: corsHeaders() });
+    if (candidates.length > 0) {
+      fullFamily = await db.productFamily.findFirst({
+        where: { storeId: store.id, shopifyProductId: { in: candidates } },
+        select: familySelect,
+      });
+    }
+
+    if (!fullFamily && handle) {
+      fullFamily = await db.productFamily.findFirst({
+        where: { storeId: store.id, OR: [{ handle }, { slug: handle }] },
+        select: familySelect,
+      });
+    }
+
+    if (!fullFamily) {
+      return Response.json({ error: 'PRODUCT_FAMILY_NOT_FOUND', message: 'No configurator for this product.', debug }, { status: 404, headers: corsHeaders() });
+    }
+
+    if (fullFamily.status !== 'ACTIVE') {
+      debug.familyFoundInactive = true;
+      return Response.json({
+        error: 'FAMILY_NOT_ACTIVE',
+        message: `"${fullFamily.name}" has status "${fullFamily.status}". Set to ACTIVE.`,
+        debug,
+      }, { status: 404, headers: corsHeaders() });
+    }
+
+    const { status: _status, ...configuratorData } = fullFamily;
+
+    return Response.json(
+      { configurator: configuratorData },
+      { status: 200, headers: corsHeaders('public, s-maxage=60, stale-while-revalidate=300') }
+    );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error('[storefront/configurator]', message, error);

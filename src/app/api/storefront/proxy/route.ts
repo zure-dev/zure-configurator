@@ -3,6 +3,11 @@ import { db } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
+// ──────────────────────────────────────────────
+// GET /api/storefront/proxy
+// Optimized: 2 DB queries max, CDN cache 60s + stale 5min
+// ──────────────────────────────────────────────
+
 export async function GET(request: NextRequest) {
   const shopDomain = request.nextUrl.searchParams.get('shop') ?? '';
   const productId = request.nextUrl.searchParams.get('productId') ?? '';
@@ -18,10 +23,12 @@ export async function GET(request: NextRequest) {
     if (!shopDomain) return Response.json({ error: 'MISSING_SHOP', message: 'shop parameter is required', debug });
     if (!productId && !handle) return Response.json({ error: 'MISSING_PRODUCT', message: 'productId or handle is required', debug });
 
+    // Query 1: Store lookup
     const store = await db.store.findUnique({ where: { shopifyDomain: shopDomain }, select: { id: true } });
     if (!store) return Response.json({ error: 'STORE_NOT_FOUND', message: `No store found for "${shopDomain}"`, debug });
     debug.storeFound = true;
 
+    // Build product ID candidates
     const candidates: string[] = [];
     if (productId) {
       candidates.push(productId);
@@ -31,69 +38,94 @@ export async function GET(request: NextRequest) {
     }
     debug.normalizedProductIds = candidates;
 
-    let family = null;
-    if (candidates.length > 0) {
-      family = await db.productFamily.findFirst({ where: { storeId: store.id, status: 'ACTIVE', shopifyProductId: { in: candidates } }, select: { id: true } });
-      if (!family) {
-        const inactive = await db.productFamily.findFirst({ where: { storeId: store.id, shopifyProductId: { in: candidates } }, select: { id: true, status: true, name: true } });
-        if (inactive) { debug.familyFoundInactive = true; return Response.json({ error: 'FAMILY_NOT_ACTIVE', message: `"${inactive.name}" has status "${inactive.status}". Set to ACTIVE.`, debug }); }
-      }
-    }
-    if (!family && handle) {
-      family = await db.productFamily.findFirst({ where: { storeId: store.id, status: 'ACTIVE', OR: [{ handle }, { slug: handle }] }, select: { id: true } });
-    }
-    if (!family) return Response.json({ error: 'PRODUCT_FAMILY_NOT_FOUND', message: 'No configurator for this product.', debug });
-
-    const fullFamily = await db.productFamily.findUnique({
-      where: { id: family.id },
-      select: {
-        id: true, name: true, handle: true, basePrice: true,
-        variantProfiles: {
-          where: { isActive: true },
-          orderBy: { sortOrder: 'asc' },
-          select: {
-            id: true, name: true, slug: true,
-            shopifyVariantId: true, shopifyVariantTitle: true,
-            shopifySku: true, isDefault: true, isActive: true,
-          },
+    // Query 2: Load full family data in ONE query (skip the separate findFirst + findUnique)
+    const familySelect = {
+      id: true, name: true, handle: true, basePrice: true, status: true,
+      variantProfiles: {
+        where: { isActive: true },
+        orderBy: { sortOrder: 'asc' as const },
+        select: {
+          id: true, name: true, slug: true,
+          shopifyVariantId: true, shopifyVariantTitle: true,
+          shopifySku: true, isDefault: true, isActive: true,
         },
-        optionGroups: {
-          orderBy: { sortOrder: 'asc' },
-          select: {
-            id: true, name: true, slug: true, displayType: true,
-            sortOrder: true, isRequired: true, helperText: true,
-            stepNumber: true, isConditional: true, visibilityConditions: true,
-            variantProfileId: true,
-            values: {
-              orderBy: { sortOrder: 'asc' },
-              select: {
-                id: true, name: true, slug: true, sortOrder: true,
-                isDefault: true, swatchColor: true, thumbnailUrl: true,
-                description: true, shopifyVariantId: true,
-                shopifyPrice: true, shopifyImageUrl: true,
-                productMappings: {
-                  orderBy: { sortOrder: 'asc' },
-                  select: {
-                    id: true, shopifyVariantId: true, shopifyProductTitle: true,
-                    shopifyVariantTitle: true, shopifyImageUrl: true,
-                    shopifyPrice: true, quantity: true, role: true,
-                  },
+      },
+      optionGroups: {
+        orderBy: { sortOrder: 'asc' as const },
+        select: {
+          id: true, name: true, slug: true, displayType: true,
+          sortOrder: true, isRequired: true, helperText: true,
+          stepNumber: true, isConditional: true, visibilityConditions: true,
+          variantProfileId: true,
+          values: {
+            orderBy: { sortOrder: 'asc' as const },
+            select: {
+              id: true, name: true, slug: true, sortOrder: true,
+              isDefault: true, swatchColor: true, thumbnailUrl: true,
+              description: true, shopifyVariantId: true,
+              shopifyPrice: true, shopifyImageUrl: true,
+              productMappings: {
+                orderBy: { sortOrder: 'asc' as const },
+                select: {
+                  id: true, shopifyVariantId: true, shopifyProductTitle: true,
+                  shopifyVariantTitle: true, shopifyImageUrl: true,
+                  shopifyPrice: true, quantity: true, role: true,
                 },
               },
             },
           },
         },
-        priceRules: {
-          where: { isActive: true },
-          orderBy: { sortOrder: 'asc' },
-          select: { optionGroupSlug: true, optionValueSlug: true, priceModifier: true, modifierType: true, conditions: true },
-        },
       },
-    });
+      priceRules: {
+        where: { isActive: true },
+        orderBy: { sortOrder: 'asc' as const },
+        select: { optionGroupSlug: true, optionValueSlug: true, priceModifier: true, modifierType: true, conditions: true },
+      },
+    };
 
-    if (!fullFamily) return Response.json({ error: 'LOAD_FAILED', message: 'Could not load configurator data', debug });
+    let fullFamily = null;
 
-    return Response.json({ configurator: fullFamily });
+    // Try by product ID first
+    if (candidates.length > 0) {
+      fullFamily = await db.productFamily.findFirst({
+        where: { storeId: store.id, shopifyProductId: { in: candidates } },
+        select: familySelect,
+      });
+    }
+
+    // Fallback to handle
+    if (!fullFamily && handle) {
+      fullFamily = await db.productFamily.findFirst({
+        where: { storeId: store.id, OR: [{ handle }, { slug: handle }] },
+        select: familySelect,
+      });
+    }
+
+    if (!fullFamily) {
+      return Response.json({ error: 'PRODUCT_FAMILY_NOT_FOUND', message: 'No configurator for this product.', debug });
+    }
+
+    // Check if found but not ACTIVE
+    if (fullFamily.status !== 'ACTIVE') {
+      debug.familyFoundInactive = true;
+      return Response.json({
+        error: 'FAMILY_NOT_ACTIVE',
+        message: `"${fullFamily.name}" has status "${fullFamily.status}". Set to ACTIVE.`,
+        debug,
+      });
+    }
+
+    // Strip status from response (not customer-facing)
+    const { status: _status, ...configuratorData } = fullFamily;
+
+    return Response.json(
+      { configurator: configuratorData },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300',
+        },
+      }
+    );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error('[storefront/proxy]', message, error);
