@@ -10,16 +10,33 @@ import {
 export const dynamic = 'force-dynamic';
 
 // GET /api/product-families — list all product families for the store
+// Optimized: only returns fields needed for list view + counts
 // Optional query params: ?status=ACTIVE&category=vanities
 export async function GET(request: NextRequest) {
   try {
     const tenant = await getTenantFromSession(request);
     if (!tenant) return tenantError('Unauthorized', 401);
 
-    const status = request.nextUrl.searchParams.get('status') as any ?? undefined;
+    const status = request.nextUrl.searchParams.get('status') ?? undefined;
     const category = request.nextUrl.searchParams.get('category') ?? undefined;
 
-    const families = await listProductFamilies(tenant.storeId, { status, category });
+    const where: Record<string, unknown> = { storeId: tenant.storeId };
+    if (status) where.status = status;
+    if (category) where.category = category;
+
+    const families = await db.productFamily.findMany({
+      where,
+      select: {
+        id: true, name: true, handle: true, slug: true,
+        status: true, category: true, basePrice: true,
+        shopifyProductId: true,
+        createdAt: true, updatedAt: true,
+        _count: { select: { optionGroups: true } },
+        shopifyLink: { select: { shopifyProductHandle: true } },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
     return tenantResponse({ families });
   } catch (error) {
     console.error('[product-families/GET]', error);

@@ -18,7 +18,7 @@
   if (!proxyPath && !appUrl) { showError('Configurator not configured.'); return; }
 
   var configurator = null, selections = {}, priceRules = [];
-  var activeVariantId = initialVariantId, activeProfileId = null, cartLoading = false;
+  var activeVariantId = initialVariantId, activeProfileId = null, cartLoading = false, lastCartData = null;
 
   function normalizeVariantId(vid) {
     if (!vid) return '';
@@ -205,15 +205,22 @@
 
   function renderVal(g, v, dt) {
     var sel = selections[g.slug] === v.slug, pm = getPriceMod(g.slug, v.slug), ec = '', inner = '';
+    // Value price from shopifyPrice (individual item price)
+    var valPrice = v.shopifyPrice ? fmt(parseFloat(v.shopifyPrice)) : '';
     if (dt === 'SWATCH' && v.swatchColor) { ec = ' zure-cfg-swatch'; inner += '<div class="zure-cfg-swatch-circle" style="background:' + ea(v.swatchColor) + ';"></div><span class="zure-cfg-value-label">' + eh(v.name) + '</span>'; }
     else if ((dt === 'THUMBNAIL' || dt === 'TILE') && v.thumbnailUrl) { ec = ' zure-cfg-image" style="--hover-img:url(' + ea(v.thumbnailUrl) + ')'; inner += '<img class="zure-cfg-image-thumb" src="' + ea(v.thumbnailUrl) + '" alt="' + ea(v.name) + '" loading="lazy"/><span class="zure-cfg-value-label">' + eh(v.name) + '</span>'; }
     else { inner += '<span class="zure-cfg-value-label">' + eh(v.name) + '</span>'; }
+    if (valPrice) inner += '<span class="zure-cfg-value-price">' + valPrice + '</span>';
     if (pm) inner += '<span class="zure-cfg-price-mod">' + eh(pm) + '</span>';
     return '<div class="zure-cfg-value' + ec + '" data-selected="' + sel + '" data-group-slug="' + ea(g.slug) + '" data-value-slug="' + ea(v.slug) + '" role="button" tabindex="0" aria-pressed="' + sel + '">' + inner + '</div>';
   }
   function renderDD(g, vals) {
     var s = selections[g.slug] || '', h = '<select class="zure-cfg-dropdown" data-group-slug="' + ea(g.slug) + '"><option value="">— Select —</option>';
-    for (var i = 0; i < vals.length; i++) { var v = vals[i], pm = getPriceMod(g.slug, v.slug); h += '<option value="' + ea(v.slug) + '"' + (s === v.slug ? ' selected' : '') + '>' + eh(v.name + (pm ? ' (' + pm + ')' : '')) + '</option>'; }
+    for (var i = 0; i < vals.length; i++) {
+      var v = vals[i], pm = getPriceMod(g.slug, v.slug);
+      var priceLabel = v.shopifyPrice ? ' — ' + fmt(parseFloat(v.shopifyPrice)) : '';
+      h += '<option value="' + ea(v.slug) + '"' + (s === v.slug ? ' selected' : '') + '>' + eh(v.name + priceLabel + (pm ? ' (' + pm + ')' : '')) + '</option>';
+    }
     return h + '</select>';
   }
 
@@ -254,13 +261,28 @@
       })
       .then(function (data) {
         console.log('[ZureConfigurator] Cart prepared:', data.shopifyItems.length, 'items');
+        lastCartData = data;
         return addToShopifyCart(data.shopifyItems);
       })
       .then(function () {
-        if (st) { st.style.display = 'block'; st.textContent = 'Added to cart!'; }
-        if (btn) btn.textContent = 'Added!';
         document.dispatchEvent(new CustomEvent('zure:cart-add', { detail: { selections: selections, price: calculatePrice() } }));
-        setTimeout(function () { window.location.href = '/cart'; }, 1000);
+
+        // Build inline configuration summary
+        var summaryHtml = '<div class="zure-cfg-success">';
+        summaryHtml += '<div class="zure-cfg-success-header">✓ Added to Cart</div>';
+        summaryHtml += '<div class="zure-cfg-success-summary">';
+        if (lastCartData && lastCartData.configurationSummary) {
+          var cs = lastCartData.configurationSummary;
+          var keys = Object.keys(cs);
+          for (var k = 0; k < keys.length; k++) { summaryHtml += '<div class="zure-cfg-summary-row"><span class="zure-cfg-summary-label">' + eh(keys[k]) + '</span><span class="zure-cfg-summary-value">' + eh(cs[keys[k]]) + '</span></div>'; }
+        }
+        summaryHtml += '<div class="zure-cfg-summary-row zure-cfg-summary-total"><span class="zure-cfg-summary-label">Total</span><span class="zure-cfg-summary-value">' + fmt(calculatePrice()) + '</span></div>';
+        summaryHtml += '</div>';
+        summaryHtml += '<a href="/cart" class="zure-cfg-cta" style="display:block;text-decoration:none;margin-top:12px;">View Cart</a>';
+        summaryHtml += '<button class="zure-cfg-continue" onclick="window.location.reload()">Continue Shopping</button>';
+        summaryHtml += '</div>';
+        container.innerHTML = summaryHtml;
+        cartLoading = false;
       })
       .catch(function (err) {
         console.error('[ZureConfigurator] Cart error:', err.message);
