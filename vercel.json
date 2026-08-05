@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/dashboard/stats?shop=zure-au.myshopify.com",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}
