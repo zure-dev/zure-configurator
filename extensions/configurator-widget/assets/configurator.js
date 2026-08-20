@@ -243,7 +243,7 @@
     if (btn) { btn.disabled = true; btn.textContent = 'Adding to cart...'; }
 
     var prepareBody = { shop: shopDomain, productFamilyId: configurator.id, variantProfileId: activeProfileId, selections: selections };
-    var prepareUrl = proxyPath ? proxyPath.replace(/\?.*$/, '') + '/cart/prepare' : '';
+    var prepareUrl = appUrl ? appUrl + '/api/storefront/proxy/cart/prepare' : '';
 
     if (!prepareUrl) {
       console.error('[ZureConfigurator] No proxy path available for cart preparation');
